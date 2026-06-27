@@ -1,0 +1,42 @@
+# Local / cloud-agnostic stack: FastAPI app + SQL Server.
+# In cloud, drop the `db` service and point EVAVO_DB_* at managed SQL Server.
+services:
+  db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Your_strong_Pass123"
+      MSSQL_PID: "Developer"
+    ports:
+      - "1433:1433"
+    volumes:
+      - mssql_data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$MSSQL_SA_PASSWORD\" -C -Q \"SELECT 1\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: ./backend
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      EVAVO_DB_HOST: db
+      EVAVO_DB_PORT: "1433"
+      EVAVO_DB_NAME: evavo
+      EVAVO_DB_USER: sa
+      EVAVO_DB_PASSWORD: "Your_strong_Pass123"
+      EVAVO_DB_TRUST_CERT: "true"
+      EVAVO_JWT_SECRET: "change-me-in-production"
+      # Mount the client workbooks read-only for the import endpoint.
+      EVAVO_SHEETS_DIR: "/data/sheets"
+    volumes:
+      - "../working excel sheet from clients:/data/sheets:ro"
+      - "./frontend:/app/frontend:ro"
+    ports:
+      - "8000:8000"
+
+volumes:
+  mssql_data:

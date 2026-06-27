@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Evavo · Cloud Quotation Platform</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- Login -->
+<div class="login-wrap" id="loginWrap">
+  <form class="login-card" id="loginForm" onsubmit="return doLogin(event)">
+    <div class="lg-logo">EV</div>
+    <h2>Evavo Quotation Cloud</h2>
+    <p>Sign in to build and manage quotes.</p>
+    <div class="err hide" id="loginErr"></div>
+    <div class="field"><label>Email</label><input id="loginEmail" type="email" autocomplete="username" required></div>
+    <div class="field"><label>Password</label><input id="loginPass" type="password" autocomplete="current-password" required></div>
+    <button class="btn primary" style="width:100%;justify-content:center" id="loginBtn">Sign in</button>
+    <div class="login-hint">
+      Demo logins — click to fill:
+      <div>
+        <button type="button" onclick="fillLogin('sales@evavo.test','sales123')">Sales</button>
+        <button type="button" onclick="fillLogin('manager@evavo.test','manager123')">Manager</button>
+        <button type="button" onclick="fillLogin('admin@evavo.test','admin123')">Admin</button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<!-- App -->
+<div class="app hide" id="appRoot">
+  <aside class="sidebar">
+    <div class="sb-brand"><div class="sb-logo">EV</div><div><b>Evavo</b><span>Quotation Cloud</span></div></div>
+    <div class="nav-group">Overview</div>
+    <button class="nav-item active" data-view="dashboard"><span class="ni">▦</span> Dashboard</button>
+    <button class="nav-item" data-view="pipeline"><span class="ni">⇄</span> Sales Pipeline</button>
+    <div class="nav-group">Quoting</div>
+    <button class="nav-item" data-view="builder"><span class="ni">🧮</span> Quote Builder</button>
+    <button class="nav-item" data-view="preview"><span class="ni">📄</span> Client Preview</button>
+    <div class="nav-group">Masters</div>
+    <button class="nav-item" data-view="products"><span class="ni">📦</span> Product Catalog</button>
+    <button class="nav-item" data-view="masters"><span class="ni">🗂️</span> Masters</button>
+    <div class="sb-foot" id="sbFoot">Connected to live pricing engine</div>
+  </aside>
+  <div class="main">
+    <header class="topbar">
+      <div class="tb-title" id="tbTitle">Dashboard</div>
+      <div class="role-pill" id="rolePill"><span class="rdot"></span><span id="roleLabel">—</span></div>
+      <button class="linkbtn" onclick="logout()">Sign out</button>
+      <div class="tb-user" id="userAvatar">··</div>
+    </header>
+    <div class="content">
+
+      <!-- Dashboard -->
+      <section class="view active" id="dashboard">
+        <div class="page-head"><div><h1 id="welcome">Welcome back</h1><p>Here's what's happening across your quotes today.</p></div><button class="btn primary" onclick="newQuote()">＋ New Quote</button></div>
+        <div class="kpis" id="kpis"></div>
+        <div class="dash-grid">
+          <div class="card pad">
+            <div class="section-title">Recent Quotes</div>
+            <table class="tbl"><thead><tr><th>Quote No.</th><th>Client</th><th class="num">Value</th><th>Status</th></tr></thead><tbody id="recentQuotes"></tbody></table>
+          </div>
+          <div class="card pad">
+            <div class="section-title">Pipeline by Stage</div>
+            <div class="mini-bars" id="pipelineBars"></div>
+            <div style="margin-top:18px" class="section-title">FX Rates <span class="badge cli">live table</span></div>
+            <table class="tbl"><tbody id="fxRows"></tbody></table>
+          </div>
+        </div>
+      </section>
+
+      <!-- Pipeline -->
+      <section class="view" id="pipeline">
+        <div class="page-head"><div><h1>Sales Pipeline</h1><p>Lead → Quote → Order, in one board.</p></div><button class="btn primary" onclick="newQuote()">＋ New Quote</button></div>
+        <div class="kanban" id="kanban"></div>
+      </section>
+
+      <!-- Product Catalog -->
+      <section class="view" id="products">
+        <div class="page-head"><div><h1>Product Catalog</h1><p>Master list of spa &amp; salon equipment, imported from the working sheets.</p></div></div>
+        <div class="filters">
+          <input id="prodSearch" placeholder="🔍  Search products…" oninput="renderProducts()">
+          <select id="prodCat" onchange="renderProducts()"><option value="">All Categories</option></select>
+          <span class="badge int" data-cost>Cost shown — Manager view</span>
+          <span class="badge cli" data-nocost>Cost hidden — Sales view</span>
+        </div>
+        <div class="prod-grid" id="prodGrid"></div>
+      </section>
+
+      <!-- Quote Builder -->
+      <section class="view" id="builder">
+        <div class="page-head"><div><h1>Quote Builder</h1><p id="builderSub">New draft</p></div><div style="display:flex;gap:9px"><button class="btn ghost" onclick="goto('preview')">Preview</button><button class="btn teal" id="saveBtn" onclick="saveQuote()">💾 Save Quote</button></div></div>
+        <div class="qb-grid">
+          <div>
+            <div class="card pad" style="margin-bottom:16px">
+              <div class="section-title">Quote Details</div>
+              <div class="f2">
+                <div class="field"><label>Customer</label><input id="qCustomer" value="Ghareni Spa &amp; Salon Pvt Ltd"></div>
+                <div class="field"><label>Client Email</label><input id="qEmail" value="purchase@gharenispa.in"></div>
+                <div class="field"><label>Currency</label><select id="curSel" onchange="recalc()"></select></div>
+                <div class="field"><label>Terms Template</label><select id="qTerms"></select></div>
+              </div>
+            </div>
+            <div class="card pad">
+              <div class="section-title">Line Items</div>
+              <div class="additem">
+                <span style="font-size:12.5px;color:var(--muted);flex:1;min-width:160px">🖼️ Browse the catalog with product images, set quantity, and add items to the quote.</span>
+                <button class="btn primary sm" onclick="openPicker()" style="height:39px">🛍️ Add Products<span class="cartbadge" id="addBadge">0</span></button>
+              </div>
+              <div class="tbl-wrap"><table class="items"><thead><tr>
+                <th style="width:56px"></th><th>Product</th><th class="num">Unit Price</th><th class="num">Qty</th><th class="num">Disc %</th>
+                <th class="num cost-col" data-cost>Cost</th><th class="num cost-col" data-cost>Margin</th><th class="num">Amount</th><th></th>
+              </tr></thead><tbody id="itemsBody"></tbody></table></div>
+            </div>
+          </div>
+          <div class="summary"><div class="card pad">
+            <div class="section-title">Summary</div>
+            <div class="sum-row"><span class="muted">Items subtotal</span><span id="sSub" class="num">—</span></div>
+            <div class="sum-row"><span class="muted">Discount given</span><span id="sDisc" class="num">—</span></div>
+            <div style="margin:12px 0 4px" class="section-title">Add-on Charges</div>
+            <div class="addon-row"><label><input type="checkbox" id="aInstall" checked onchange="recalc()"> Installation (10.5%)</label><span id="sInstall" class="num">—</span></div>
+            <div class="addon-row"><label>Special packaging</label><input type="number" id="aPack" value="0" onchange="recalc()" oninput="recalc()"></div>
+            <div class="addon-row"><label>Freight / import</label><input type="number" id="aFreight" value="0" onchange="recalc()" oninput="recalc()"></div>
+            <div class="sum-row total" style="margin-top:14px"><span>Grand Total</span><span id="sGrand" class="num">—</span></div>
+            <div class="approval hide" id="approvalBox">⚠ <b>Approval required.</b> Discount exceeds the 12% policy limit. This quote will route to a manager before it can be sent.</div>
+            <div class="margin-box" data-cost>
+              <div class="mb-h"><span>Internal — Manager only</span><span class="badge int">CONFIDENTIAL</span></div>
+              <div class="mb-v"><span>Total cost (C2E)</span><span id="mCost" class="num">—</span></div>
+              <div class="mb-v"><span>Gross margin</span><span id="mMargin" class="num">—</span></div>
+              <div class="mb-v" style="align-items:center;margin-top:6px"><span>Margin %</span><span class="big" id="mPct">—</span></div>
+            </div>
+          </div></div>
+        </div>
+      </section>
+
+      <!-- Client Preview -->
+      <section class="view" id="preview">
+        <div class="page-head"><div><h1>Client Preview</h1><p>Exactly what the client receives — selling prices only.</p></div><div style="display:flex;gap:9px;flex-wrap:wrap"><button class="btn ghost" onclick="goto('builder')">← Edit</button><button class="btn ghost" id="reviseBtn" onclick="reviseCurrent()">🔁 Revise</button><button class="btn primary" id="pdfBtn" onclick="downloadPdf()">⬇ Download PDF</button><button class="btn teal" id="emailBtn" onclick="emailCurrent()">✉ Email to client</button></div></div>
+        <div class="safe-note">🔒 Client-safe view — internal cost, margin and FX build-up are never included in this document.</div>
+        <div class="paper">
+          <div class="ph"><div><div class="l">EV</div><h2>Evavo Wellness &amp; Solutions LLP</h2><div style="font-size:11.5px;color:#aecbe6;margin-top:4px">Spa Consulting · Spa &amp; Salon Equipment</div></div><div class="qmeta"><b style="color:#fff;font-size:14px">QUOTATION</b><br>No: <span id="pvNo">—</span><br>Date: <span id="pvDate">—</span><br>Valid: 2 weeks</div></div>
+          <div class="pb">
+            <div class="to"><div><b>Bill To</b><span id="pvBillTo">—</span></div><div style="text-align:right"><b>Currency</b><span id="pvCur">INR (₹)</span></div></div>
+            <table class="cli"><thead><tr><th>#</th><th>Item</th><th class="num">Unit Price</th><th class="num">Qty</th><th class="num">Amount</th></tr></thead><tbody id="pvBody"></tbody></table>
+            <div class="cli-tot"><div class="r"><span>Subtotal</span><span id="pvSub" class="num">—</span></div><div class="r"><span>Installation</span><span id="pvInstall" class="num">—</span></div><div class="r"><span>Packaging</span><span id="pvPack" class="num">—</span></div><div class="r g"><span>Grand Total</span><span id="pvGrand" class="num">—</span></div></div>
+            <div class="terms" id="pvTerms"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Masters -->
+      <section class="view" id="masters">
+        <div class="page-head"><div><h1>Masters</h1><p>Manage clients, leads, terms templates and email setup.</p></div></div>
+        <div class="role-toggle" id="mTabs" style="margin-bottom:16px">
+          <button class="on" data-mtab="clients" onclick="mtab('clients')">Clients</button>
+          <button data-mtab="leads" onclick="mtab('leads')">Leads</button>
+          <button data-mtab="terms" onclick="mtab('terms')">Terms</button>
+          <button data-mtab="email" onclick="mtab('email')" data-cost>Email Setup</button>
+        </div>
+        <div id="mContent"></div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<!-- Product picker modal -->
+<div class="modal" id="picker"><div class="modal-card">
+  <div class="modal-head"><h3>🛍️ Add Products to Quote</h3><button class="modal-close" onclick="closePicker()">✕</button></div>
+  <div class="modal-filters"><input id="pkSearch" placeholder="🔍  Search by name or model…" oninput="renderPicker()"><select id="pkCat" onchange="renderPicker()"><option value="">All Categories</option></select></div>
+  <div class="picker-grid" id="pickerGrid"></div>
+  <div class="modal-foot"><span class="cart-cnt" id="cartCnt">0 items in quote</span><button class="btn primary" onclick="closePicker()">Done</button></div>
+</div></div>
+
+<nav class="bottomnav hide" id="bnav">
+  <button class="active" data-view="dashboard"><span class="bi">▦</span>Home</button>
+  <button data-view="pipeline"><span class="bi">⇄</span>Pipeline</button>
+  <button data-view="builder"><span class="bi">🧮</span>Quote</button>
+  <button data-view="products"><span class="bi">📦</span>Catalog</button>
+  <button data-view="preview"><span class="bi">📄</span>Preview</button>
+</nav>
+
+<div class="toast" id="toast"></div>
+
+<script src="api.js?v=4"></script>
+<script src="app.js?v=4"></script>
+</body>
+</html>
