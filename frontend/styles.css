@@ -154,7 +154,7 @@ table.items input{width:62px;border:1px solid var(--line);border-radius:7px;padd
 .qstep button{border:0;background:#f3f8fc;width:36px;height:36px;font-size:17px;color:var(--navy)}
 .qstep input{width:36px;height:36px;border:0;text-align:center;font-size:13px}
 .pk-add .btn{flex:1;justify-content:center}
-.added-flash{background:var(--good)!important}
+.btn.added{background:var(--good);color:#fff}
 .modal-foot{padding:13px 20px;border-top:1px solid var(--line);display:flex;align-items:center;gap:12px}
 .modal-foot .cart-cnt{font-weight:700;color:var(--navy);margin-right:auto;font-size:13.5px}
 .cartbadge{background:var(--red);color:#fff;border-radius:20px;padding:1px 8px;font-size:11px;font-weight:800;margin-left:7px}

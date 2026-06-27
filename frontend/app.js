@@ -176,6 +176,15 @@ function renderProducts() {
 // ---- Picker ----
 function openPicker() { $("picker").classList.add("open"); renderPicker(); }
 function closePicker() { $("picker").classList.remove("open"); }
+// Add/remove button for a product, rendered from its current cart membership so
+// the picker, re-opens and live filtering all show a consistent state.
+function pickAddBtnHtml(p) {
+  const inCart = LINES.some((l) => l.pid === p.id);
+  const cls = inCart ? "btn added sm" : "btn primary sm";
+  const label = inCart ? "✓ Added" : "Add to cart";
+  return '<button class="' + cls + '" id="pa' + p.id +
+    '" onclick="pickToggle(' + p.id + ')">' + label + "</button>";
+}
 function renderPicker() {
   const g = $("pickerGrid");
   const q = ($("pkSearch").value || "").toLowerCase();
@@ -191,18 +200,28 @@ function renderPicker() {
         '</span><b>' + p.name + '</b><span class="pk-model">' + (p.model_no || "") +
         '</span><span class="pk-price">₹ ' + Math.round(p.client_unit_price).toLocaleString("en-IN") + "</span>" + costLine +
         '</div><div class="pk-add"><div class="qstep"><button onclick="pq(' + p.id + ',-1)">−</button><input id="pq' + p.id +
-        '" value="1" readonly><button onclick="pq(' + p.id + ',1)">＋</button></div><button class="btn primary sm" id="pa' + p.id +
-        '" onclick="pickAdd(' + p.id + ')">Add to cart</button></div>';
+        '" value="1" readonly><button onclick="pq(' + p.id + ',1)">＋</button></div>' + pickAddBtnHtml(p) + '</div>';
       g.appendChild(d);
     });
 }
 function pq(id, delta) { const i = $("pq" + id); i.value = Math.max(1, (parseInt(i.value, 10) || 1) + delta); }
-function pickAdd(id) {
-  const qty = parseInt($("pq" + id).value, 10) || 1;
-  const ex = LINES.find((l) => l.pid === id);
-  if (ex) ex.qty += qty; else LINES.push({ pid: id, qty, disc: 0 });
-  const btn = $("pa" + id);
-  if (btn) { btn.textContent = "✓ Added"; btn.classList.add("added-flash"); setTimeout(() => { btn.textContent = "Add to cart"; btn.classList.remove("added-flash"); }, 900); }
+// Flip a single card's button to match cart state without re-rendering the grid
+// (keeps scroll position).
+function setPickBtn(id) {
+  const btn = $("pa" + id); if (!btn) return;
+  const inCart = LINES.some((l) => l.pid === id);
+  btn.textContent = inCart ? "✓ Added" : "Add to cart";
+  btn.className = inCart ? "btn added sm" : "btn primary sm";
+}
+function pickToggle(id) {
+  const idx = LINES.findIndex((l) => l.pid === id);
+  if (idx >= 0) {
+    LINES.splice(idx, 1);                 // already in cart → remove it
+  } else {
+    const qty = parseInt($("pq" + id).value, 10) || 1;
+    LINES.push({ pid: id, qty, disc: 0 });
+  }
+  setPickBtn(id);
   renderItems(); recalc(); updateCart();
 }
 function updateCart() {
