@@ -104,11 +104,14 @@ def run_import() -> dict:
                 "list_uplift": rec.list_uplift,
                 "markup_base": rec.markup_base.value,
             })
-            key = (rec.model_no or "", rec.name)
+            # Match on the exact originating Excel cell, not name/model_no —
+            # several rows legitimately share the same name and have no model
+            # number, so that pair isn't a unique key.
             existing = db.execute(
-                select(Product).where(Product.name == rec.name,
-                                      Product.model_no == (rec.model_no or None))
-            ).scalar_one_or_none()
+                select(Product).where(Product.source_file == rec.source_file,
+                                      Product.source_sheet == rec.source_sheet,
+                                      Product.source_row == rec.source_row)
+            ).scalars().first()
             data = dict(
                 name=rec.name, model_no=rec.model_no or None, category=rec.category,
                 description=rec.description or None, product_link=rec.product_link or None,
@@ -119,6 +122,7 @@ def run_import() -> dict:
                 migrated_final_c2e=rec.migrated_final_c2e,
                 migrated_client_unit=rec.migrated_client_unit,
                 is_manual_override=rec.is_manual_override, source_file=rec.source_file,
+                source_sheet=rec.source_sheet, source_row=rec.source_row,
             )
             if existing:
                 for k, v in data.items():

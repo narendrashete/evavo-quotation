@@ -78,6 +78,8 @@ class Product(Base):
     is_manual_override: Mapped[bool] = mapped_column(Boolean, default=False)
 
     source_file: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source_sheet: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    source_row: Mapped[int | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
