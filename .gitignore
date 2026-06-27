@@ -8,3 +8,4 @@ venv/
 ~$*.xlsx
 *.db
 .DS_Store
+backend/app/static/product_images/

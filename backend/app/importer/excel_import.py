@@ -38,6 +38,11 @@ DEFAULT_SHEETS_DIR = os.environ.get(
                  "working excel sheet from clients"),
 )
 
+# Where extracted product photos (embedded in the workbooks) are saved; served
+# at /static/product_images by app.main.
+IMAGE_DIR = os.path.join(os.path.dirname(__file__), "..", "static", "product_images")
+IMAGE_URL_PREFIX = "/static/product_images"
+
 # How a (file, sheet) maps to a product category. Falls back to the sheet title.
 CATEGORY_BY_SHEET = {
     "Salon Equipments": "Salon Equipment",
@@ -85,6 +90,7 @@ class ProductRecord:
     model_no: str
     category: str
     product_link: str
+    image: str
     source_file: str
     source_sheet: str
     source_row: int
@@ -119,6 +125,52 @@ class ProductRecord:
         )
 
 
+def _image_ext(data: bytes) -> str:
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "jpg"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "gif"
+    return "png"
+
+
+def _extract_row_images(ws) -> dict[int, bytes]:
+    """Map 1-indexed sheet row -> bytes of the largest image anchored on that
+    row (workbooks have photos pasted directly into cells; tiny anchors are
+    decorative borders/lines and are skipped)."""
+    best: dict[int, tuple[int, bytes]] = {}
+    for img in getattr(ws, "_images", []):
+        frm = getattr(getattr(img, "anchor", None), "_from", None)
+        if frm is None:
+            continue
+        row = frm.row + 1  # openpyxl anchors are 0-indexed
+        area = (img.width or 0) * (img.height or 0)
+        if area < 30 * 30:
+            continue
+        try:
+            img.ref.seek(0)
+            data = img.ref.read()
+        except Exception:
+            continue
+        if not data:
+            continue
+        prev = best.get(row)
+        if prev is None or area > prev[0]:
+            best[row] = (area, data)
+    return {row: data for row, (_, data) in best.items()}
+
+
+def _save_row_image(data: bytes, source_file: str, sheet: str, row: int) -> str:
+    os.makedirs(IMAGE_DIR, exist_ok=True)
+    stem = re.sub(r"[^A-Za-z0-9_-]+", "_",
+                  os.path.splitext(os.path.basename(source_file))[0] + "_" + sheet)
+    fname = f"{stem}_r{row}.{_image_ext(data)}"
+    with open(os.path.join(IMAGE_DIR, fname), "wb") as f:
+        f.write(data)
+    return f"{IMAGE_URL_PREFIX}/{fname}"
+
+
 def _category_for(sheet_title: str) -> str:
     key = sheet_title.strip().upper()
     for k, v in CATEGORY_BY_SHEET.items():
@@ -142,6 +194,7 @@ def _parse_sheet(ws_f, ws_v, source_file: str) -> list[ProductRecord]:
     if hr is None:
         return records
     category = _category_for(ws_f.title)
+    row_images = _extract_row_images(ws_v)
 
     for r in range(hr + 1, ws_f.max_row + 1):
         name = _cell(ws_v, COL["spec"], r) or _cell(ws_v, COL["product"], r)
@@ -211,12 +264,17 @@ def _parse_sheet(ws_f, ws_v, source_file: str) -> list[ProductRecord]:
         if client_markup is None:
             client_markup = client_cached / c2e_inr if c2e_inr else 1.0
 
+        img_data = row_images.get(r)
+        image_url = (_save_row_image(img_data, source_file, ws_f.title, r)
+                     if img_data else "")
+
         rec = ProductRecord(
             name=str(name).strip(),
             description=str(_cell(ws_v, COL["desc"], r) or "").strip(),
             model_no=str(_cell(ws_v, COL["model"], r) or "").strip(),
             category=category,
             product_link=str(_cell(ws_v, COL["link"], r) or "").strip(),
+            image=image_url,
             source_file=os.path.basename(source_file),
             source_sheet=ws_f.title,
             source_row=r,

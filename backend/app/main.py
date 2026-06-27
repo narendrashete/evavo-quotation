@@ -112,6 +112,7 @@ def run_import() -> dict:
             data = dict(
                 name=rec.name, model_no=rec.model_no or None, category=rec.category,
                 description=rec.description or None, product_link=rec.product_link or None,
+                image=rec.image or None,
                 source_price_inr=rec.source_price_inr, loading_factor=rec.loading_factor,
                 client_markup=rec.client_markup, list_uplift=rec.list_uplift,
                 markup_base=rec.markup_base.value,
@@ -137,6 +138,12 @@ def run_import() -> dict:
     return {"imported": len(records), "inserted": inserted, "updated": updated,
             "categories": list(cats)}
 
+
+# Extracted product photos (from the Excel imports) — must be mounted before
+# the frontend catch-all below.
+_static = os.path.join(os.path.dirname(__file__), "static")
+os.makedirs(os.path.join(_static, "product_images"), exist_ok=True)
+app.mount("/static", StaticFiles(directory=_static), name="static")
 
 # Serve the vanilla HTML/JS/CSS frontend if present (Phase 3 fills this in).
 _frontend = os.path.join(os.path.dirname(__file__), "..", "..", "frontend")

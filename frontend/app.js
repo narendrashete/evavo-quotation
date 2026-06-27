@@ -37,8 +37,12 @@ function fmt(inr) {
 }
 function prod(id) { return PRODUCTS.find((p) => p.id === id); }
 function prodImg(p, size) {
-  const c = CATCOLOR[p.category] || ["#1a9fe0", "#0d6efd"];
   const cls = size === "sm" ? "thumb-sm" : (size === "lg" ? "thumb-lg" : "thumb-md");
+  if (p.image) {
+    return '<div class="thumb ' + cls + '"><img src="' + p.image +
+      '" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit"></div>';
+  }
+  const c = CATCOLOR[p.category] || ["#1a9fe0", "#0d6efd"];
   return '<div class="thumb ' + cls + '" style="background:linear-gradient(135deg,' +
     c[0] + ',' + c[1] + ')"><span class="tg">' + icon(p.category) + "</span></div>";
 }
