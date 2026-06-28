@@ -74,6 +74,11 @@ const API = (() => {
     getEmailSetup: () => request("GET", "/api/masters/email-setup"),
     saveEmailSetup: (d) => request("PUT", "/api/masters/email-setup", d),
     updateProduct: (id, d) => request("PUT", "/api/masters/products/" + id, d),
+    // users (admin-only)
+    users: () => request("GET", "/api/users"),
+    createUser: (d) => request("POST", "/api/users", d),
+    updateUser: (id, d) => request("PUT", "/api/users/" + id, d),
+    deleteUser: (id) => request("DELETE", "/api/users/" + id),
   };
 
   function qs(obj) {

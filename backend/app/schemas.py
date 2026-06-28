@@ -28,6 +28,15 @@ class UserOut(BaseModel):
     branch: Optional[str] = None
 
 
+class UserIn(BaseModel):
+    name: str
+    email: str
+    password: Optional[str] = Field(None, min_length=6)  # required on create; blank = unchanged on edit
+    role: str = "sales"  # sales|manager|admin
+    branch: Optional[str] = None
+    is_active: bool = True
+
+
 # --- FX ---
 class FxRateIn(BaseModel):
     currency: str = Field(min_length=3, max_length=3)

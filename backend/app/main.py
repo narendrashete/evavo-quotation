@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from app.core.config import settings
 from app.importer.parity_check import report as parity_report
 from app.importer.excel_import import import_all
-from app.routers import auth, products, fx, quotes, masters
+from app.routers import auth, products, fx, quotes, masters, users
 
 app = FastAPI(title="Evavo Quotation Platform", version="0.2.0")
 
@@ -38,7 +38,7 @@ async def no_cache_static(request, call_next):
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
     return response
 
-for r in (auth.router, products.router, fx.router, quotes.router, masters.router):
+for r in (auth.router, products.router, fx.router, quotes.router, masters.router, users.router):
     app.include_router(r)
 
 

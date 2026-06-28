@@ -52,8 +52,6 @@ function prodImg(p, size) {
 // ---- Auth / boot ----
 window.onUnauthorized = () => showLogin();
 
-function fillLogin(email, pass) { $("loginEmail").value = email; $("loginPass").value = pass; }
-
 async function doLogin(e) {
   e.preventDefault();
   $("loginErr").classList.add("hide");
@@ -105,6 +103,7 @@ async function boot() {
 function applyRoleVisibility() {
   document.querySelectorAll("[data-cost]").forEach((e) => e.classList.toggle("hide", !canSeeCost));
   document.querySelectorAll("[data-nocost]").forEach((e) => e.classList.toggle("hide", canSeeCost));
+  document.querySelectorAll("[data-admin]").forEach((e) => e.classList.toggle("hide", currentUser.role !== "admin"));
 }
 
 // ---- Data loads ----
@@ -169,7 +168,7 @@ const titles = {
   dashboard: "Dashboard", pipeline: "Sales Pipeline", products: "Product Catalog",
   builder: "Quote Builder", preview: "Client Preview",
   clientsMaster: "Clients", projectsMaster: "Projects", leadsMaster: "Leads",
-  termsMaster: "Terms", emailMaster: "Email Setup",
+  termsMaster: "Terms", emailMaster: "Email Setup", usersMaster: "Users",
 };
 function goto(v) {
   document.querySelectorAll(".view").forEach((s) => s.classList.toggle("active", s.id === v));
@@ -182,6 +181,7 @@ function goto(v) {
   if (v === "leadsMaster") renderLeadsMaster();
   if (v === "termsMaster") renderTermsMaster();
   if (v === "emailMaster") renderEmailMaster();
+  if (v === "usersMaster") renderUsersMaster();
   window.scrollTo(0, 0);
 }
 document.querySelectorAll(".nav-item,.bottomnav button").forEach((b) => {
@@ -669,6 +669,65 @@ async function saveEmail() {
     from_email: $("esFrom").value.trim(), use_tls: $("esTls").value === "true",
   });
   toast("Email setup saved.");
+}
+
+// --- Users (admin-only) ---
+let editingUserId = null;
+async function renderUsersMaster() {
+  const c = $("usersMasterContent");
+  c.innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    const rows = await API.users();
+    const editing = editingUserId != null;
+    c.innerHTML =
+      '<div class="card pad" style="margin-bottom:16px"><div class="section-title">' + (editing ? "Edit User" : "Add User") + '</div><div class="f2">' +
+      '<div class="field"><label>Name</label><input id="nuName"></div>' +
+      '<div class="field"><label>Email</label><input id="nuEmail"></div>' +
+      '<div class="field"><label>Password</label><input id="nuPassword" type="password" placeholder="' + (editing ? "(unchanged)" : "min. 6 characters") + '"></div>' +
+      '<div class="field"><label>Role</label><select id="nuRole"><option value="sales">Sales</option><option value="manager">Manager</option><option value="admin">Admin</option></select></div>' +
+      '<div class="field"><label>Branch</label><input id="nuBranch"></div>' +
+      '<div class="field"><label>Active</label><select id="nuActive"><option value="true">Yes</option><option value="false">No</option></select></div></div>' +
+      '<button class="btn primary sm" onclick="saveUser()">' + (editing ? "💾 Update User" : "＋ Add User") + "</button>" +
+      (editing ? ' <button class="btn ghost sm" onclick="cancelUserEdit()">Cancel</button>' : "") + "</div>" +
+      '<div class="card pad"><div class="section-title">Users (' + rows.length + ')</div>' +
+      '<table class="tbl"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Branch</th><th>Active</th><th></th><th></th></tr></thead><tbody>' +
+      (rows.length ? rows.map((r) => "<tr><td>" + esc(r.name) + "</td><td>" + esc(r.email) + "</td><td>" + esc(r.role) +
+        "</td><td>" + esc(r.branch) + "</td><td>" + (r.is_active ? "Yes" : "No") +
+        '</td><td><button class="btn ghost sm" onclick="editUser(' + r.id + ')">Edit</button></td>' +
+        '<td><button class="del" onclick="delUser(' + r.id + ')">✕</button></td></tr>').join("")
+        : '<tr><td colspan="7"><div class="empty">No users yet.</div></td></tr>') + "</tbody></table></div>";
+    if (editing) {
+      const r = rows.find((x) => x.id === editingUserId);
+      if (r) {
+        $("nuName").value = r.name || ""; $("nuEmail").value = r.email || "";
+        $("nuRole").value = r.role; $("nuBranch").value = r.branch || "";
+        $("nuActive").value = r.is_active ? "true" : "false";
+      }
+    }
+  } catch (e) { c.innerHTML = '<div class="empty">' + e.message + "</div>"; }
+}
+async function saveUser() {
+  const name = $("nuName").value.trim();
+  const email = $("nuEmail").value.trim();
+  const password = $("nuPassword").value;
+  if (!name) { toast("Name is required.", true); return; }
+  if (!email) { toast("Email is required.", true); return; }
+  if (editingUserId == null && password.length < 6) { toast("Password must be at least 6 characters.", true); return; }
+  const data = {
+    name, email, role: $("nuRole").value, branch: $("nuBranch").value.trim() || null,
+    is_active: $("nuActive").value === "true", password: password || null,
+  };
+  try {
+    if (editingUserId != null) { await API.updateUser(editingUserId, data); toast("User updated."); editingUserId = null; }
+    else { await API.createUser(data); toast("User added."); }
+    renderUsersMaster();
+  } catch (e) { toast("Save failed: " + e.message, true); }
+}
+function editUser(id) { editingUserId = id; renderUsersMaster(); }
+function cancelUserEdit() { editingUserId = null; renderUsersMaster(); }
+async function delUser(id) {
+  try { await API.deleteUser(id); toast("User deleted."); renderUsersMaster(); }
+  catch (e) { toast("Delete failed: " + e.message, true); }
 }
 
 // ---- Dashboard / pipeline ----
