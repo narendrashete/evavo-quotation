@@ -79,12 +79,18 @@ class ClientIn(BaseModel):
     gstin: Optional[str] = None
 
 
+class ProjectIn(BaseModel):
+    name: str
+    client_id: int
+    city: Optional[str] = None
+
+
 class LeadIn(BaseModel):
     name: str
     owner: Optional[str] = None
     stage: int = 0
     amount: float = 0.0
-    client_id: Optional[int] = None
+    project_id: int
 
 
 class TermsIn(BaseModel):

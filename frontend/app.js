@@ -134,14 +134,23 @@ function buildCategoryOptions() {
 }
 
 // ---- Navigation ----
-const titles = { dashboard: "Dashboard", pipeline: "Sales Pipeline", products: "Product Catalog", builder: "Quote Builder", preview: "Client Preview", masters: "Masters" };
+const titles = {
+  dashboard: "Dashboard", pipeline: "Sales Pipeline", products: "Product Catalog",
+  builder: "Quote Builder", preview: "Client Preview",
+  clientsMaster: "Clients", projectsMaster: "Projects", leadsMaster: "Leads",
+  termsMaster: "Terms", emailMaster: "Email Setup",
+};
 function goto(v) {
   document.querySelectorAll(".view").forEach((s) => s.classList.toggle("active", s.id === v));
   document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === v));
   document.querySelectorAll(".bottomnav button").forEach((b) => b.classList.toggle("active", b.dataset.view === v));
   $("tbTitle").textContent = titles[v] || "";
   if (v === "preview") renderPreview();
-  if (v === "masters") renderMasters();
+  if (v === "clientsMaster") renderClientsMaster();
+  if (v === "projectsMaster") renderProjectsMaster();
+  if (v === "leadsMaster") renderLeadsMaster();
+  if (v === "termsMaster") renderTermsMaster();
+  if (v === "emailMaster") renderEmailMaster();
   window.scrollTo(0, 0);
 }
 document.querySelectorAll(".nav-item,.bottomnav button").forEach((b) => {
@@ -398,95 +407,210 @@ async function reviseCurrent() {
 }
 
 // ---- Masters screens ----
-let currentMtab = "clients";
-function mtab(name) {
-  currentMtab = name;
-  document.querySelectorAll("#mTabs button").forEach((b) => b.classList.toggle("on", b.dataset.mtab === name));
-  renderMasters();
-}
-async function renderMasters() {
-  const c = $("mContent"); c.innerHTML = '<div class="empty">Loading…</div>';
-  try {
-    if (currentMtab === "clients") await renderClientsMaster(c);
-    else if (currentMtab === "leads") await renderLeadsMaster(c);
-    else if (currentMtab === "terms") await renderTermsMaster(c);
-    else if (currentMtab === "email") await renderEmailMaster(c);
-  } catch (e) { c.innerHTML = '<div class="empty">' + e.message + "</div>"; }
-}
+// Clients, Projects and Leads are now separate pages with a real hierarchy:
+// a Client has many Projects, a Project has many Leads (Lead.client_id is
+// auto-derived server-side from its Project). Each list reuses an inline
+// Add/Edit form (editing*Id tracks which row, if any, is being edited).
 const esc = (s) => (s == null ? "" : String(s).replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m])));
 
-async function renderClientsMaster(c) {
-  const rows = await API.clients();
-  const delCol = canSeeCost ? "<th></th>" : "";
-  c.innerHTML =
-    '<div class="card pad" style="margin-bottom:16px"><div class="section-title">Add Client</div><div class="f2">' +
-    '<div class="field"><label>Name</label><input id="ncName"></div>' +
-    '<div class="field"><label>Email</label><input id="ncEmail"></div>' +
-    '<div class="field"><label>Phone</label><input id="ncPhone"></div>' +
-    '<div class="field"><label>City</label><input id="ncCity"></div></div>' +
-    '<button class="btn primary sm" onclick="addClient()">＋ Add Client</button></div>' +
-    '<div class="card pad"><div class="section-title">Clients (' + rows.length + ')</div>' +
-    '<table class="tbl"><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>City</th>' + delCol + "</tr></thead><tbody>" +
-    (rows.length ? rows.map((r) => "<tr><td>" + esc(r.name) + "</td><td>" + esc(r.email) + "</td><td>" + esc(r.phone) + "</td><td>" + esc(r.city) +
-      "</td>" + (canSeeCost ? '<td><button class="del" onclick="delClient(' + r.id + ')">✕</button></td>' : "") + "</tr>").join("")
-      : '<tr><td colspan="5"><div class="empty">No clients yet.</div></td></tr>') + "</tbody></table></div>";
+// --- Clients ---
+let editingClientId = null;
+async function renderClientsMaster() {
+  const c = $("clientsMasterContent");
+  c.innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    const rows = await API.clients();
+    const editing = editingClientId != null;
+    c.innerHTML =
+      '<div class="card pad" style="margin-bottom:16px"><div class="section-title">' + (editing ? "Edit Client" : "Add Client") + '</div><div class="f2">' +
+      '<div class="field"><label>Name</label><input id="ncName"></div>' +
+      '<div class="field"><label>Email</label><input id="ncEmail"></div>' +
+      '<div class="field"><label>Phone</label><input id="ncPhone"></div>' +
+      '<div class="field"><label>City</label><input id="ncCity"></div></div>' +
+      '<button class="btn primary sm" onclick="saveClient()">' + (editing ? "💾 Update Client" : "＋ Add Client") + "</button>" +
+      (editing ? ' <button class="btn ghost sm" onclick="cancelClientEdit()">Cancel</button>' : "") + "</div>" +
+      '<div class="card pad"><div class="section-title">Clients (' + rows.length + ')</div>' +
+      '<table class="tbl"><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>City</th><th></th>' +
+      (canSeeCost ? "<th></th>" : "") + "</tr></thead><tbody>" +
+      (rows.length ? rows.map((r) => "<tr><td>" + esc(r.name) + "</td><td>" + esc(r.email) + "</td><td>" + esc(r.phone) + "</td><td>" + esc(r.city) +
+        '</td><td><button class="btn ghost sm" onclick="editClient(' + r.id + ')">Edit</button></td>' +
+        (canSeeCost ? '<td><button class="del" onclick="delClient(' + r.id + ')">✕</button></td>' : "") + "</tr>").join("")
+        : '<tr><td colspan="6"><div class="empty">No clients yet.</div></td></tr>') + "</tbody></table></div>";
+    if (editing) {
+      const r = rows.find((x) => x.id === editingClientId);
+      if (r) { $("ncName").value = r.name || ""; $("ncEmail").value = r.email || ""; $("ncPhone").value = r.phone || ""; $("ncCity").value = r.city || ""; }
+    }
+  } catch (e) { c.innerHTML = '<div class="empty">' + e.message + "</div>"; }
 }
-async function addClient() {
+async function saveClient() {
   const name = $("ncName").value.trim();
   if (!name) { toast("Client name is required.", true); return; }
-  await API.createClient({ name, email: $("ncEmail").value.trim() || null, phone: $("ncPhone").value.trim() || null, city: $("ncCity").value.trim() || null });
-  toast("Client added."); renderMasters();
+  const data = { name, email: $("ncEmail").value.trim() || null, phone: $("ncPhone").value.trim() || null, city: $("ncCity").value.trim() || null };
+  try {
+    if (editingClientId != null) { await API.updateClient(editingClientId, data); toast("Client updated."); editingClientId = null; }
+    else { await API.createClient(data); toast("Client added."); }
+    renderClientsMaster();
+  } catch (e) { toast("Save failed: " + e.message, true); }
 }
-async function delClient(id) { await API.deleteClient(id); toast("Client deleted."); renderMasters(); }
+function editClient(id) { editingClientId = id; renderClientsMaster(); }
+function cancelClientEdit() { editingClientId = null; renderClientsMaster(); }
+async function delClient(id) {
+  try { await API.deleteClient(id); toast("Client deleted."); renderClientsMaster(); }
+  catch (e) { toast("Delete failed: " + e.message, true); }
+}
 
-async function renderLeadsMaster(c) {
-  const rows = await API.leads();
-  const stageName = ["Leads", "Quoted", "Negotiation", "Won"];
-  c.innerHTML =
-    '<div class="card pad" style="margin-bottom:16px"><div class="section-title">Add Lead</div><div class="f2">' +
-    '<div class="field"><label>Name</label><input id="nlName"></div>' +
-    '<div class="field"><label>Owner</label><input id="nlOwner"></div>' +
-    '<div class="field"><label>Stage</label><select id="nlStage"><option value="0">Leads</option><option value="1">Quoted</option><option value="2">Negotiation</option><option value="3">Won</option></select></div>' +
-    '<div class="field"><label>Amount (₹)</label><input id="nlAmount" type="number" value="0"></div></div>' +
-    '<button class="btn primary sm" onclick="addLead()">＋ Add Lead</button></div>' +
-    '<div class="card pad"><div class="section-title">Leads (' + rows.length + ')</div>' +
-    '<table class="tbl"><thead><tr><th>Name</th><th>Owner</th><th>Stage</th><th class="num">Amount</th></tr></thead><tbody>' +
-    (rows.length ? rows.map((r) => "<tr><td>" + esc(r.name) + "</td><td>" + esc(r.owner) + "</td><td>" + stageName[r.stage] +
-      '</td><td class="num">₹' + (r.amount || 0).toLocaleString("en-IN") + "</td></tr>").join("")
-      : '<tr><td colspan="4"><div class="empty">No leads yet.</div></td></tr>') + "</tbody></table></div>";
+// --- Projects ---
+let editingProjectId = null;
+async function renderProjectsMaster() {
+  const c = $("projectsMasterContent");
+  c.innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    const [rows, clients] = await Promise.all([API.projects(), API.clients()]);
+    const clientName = (id) => { const cl = clients.find((x) => x.id === id); return cl ? cl.name : "—"; };
+    const editing = editingProjectId != null;
+    const clientOptions = clients.map((cl) => '<option value="' + cl.id + '">' + esc(cl.name) + "</option>").join("");
+    c.innerHTML =
+      '<div class="card pad" style="margin-bottom:16px"><div class="section-title">' + (editing ? "Edit Project" : "Add Project") + '</div><div class="f2">' +
+      '<div class="field"><label>Client</label><select id="npClient"><option value="">Select a client…</option>' + clientOptions + "</select></div>" +
+      '<div class="field"><label>Project Name</label><input id="npName"></div>' +
+      '<div class="field"><label>City</label><input id="npCity"></div></div>' +
+      '<button class="btn primary sm" onclick="saveProject()">' + (editing ? "💾 Update Project" : "＋ Add Project") + "</button>" +
+      (editing ? ' <button class="btn ghost sm" onclick="cancelProjectEdit()">Cancel</button>' : "") + "</div>" +
+      '<div class="card pad"><div class="section-title">Projects (' + rows.length + ')</div>' +
+      '<table class="tbl"><thead><tr><th>Client</th><th>Project</th><th>City</th><th></th>' +
+      (canSeeCost ? "<th></th>" : "") + "</tr></thead><tbody>" +
+      (rows.length ? rows.map((r) => "<tr><td>" + esc(clientName(r.client_id)) + "</td><td>" + esc(r.name) + "</td><td>" + esc(r.city) +
+        '</td><td><button class="btn ghost sm" onclick="editProject(' + r.id + ')">Edit</button></td>' +
+        (canSeeCost ? '<td><button class="del" onclick="delProject(' + r.id + ')">✕</button></td>' : "") + "</tr>").join("")
+        : '<tr><td colspan="5"><div class="empty">No projects yet — add a client first.</div></td></tr>') + "</tbody></table></div>";
+    if (editing) {
+      const r = rows.find((x) => x.id === editingProjectId);
+      if (r) { $("npClient").value = r.client_id || ""; $("npName").value = r.name || ""; $("npCity").value = r.city || ""; }
+    }
+  } catch (e) { c.innerHTML = '<div class="empty">' + e.message + "</div>"; }
 }
-async function addLead() {
+async function saveProject() {
+  const name = $("npName").value.trim();
+  const clientId = parseInt($("npClient").value, 10);
+  if (!name) { toast("Project name is required.", true); return; }
+  if (!clientId) { toast("Select a client.", true); return; }
+  const data = { name, client_id: clientId, city: $("npCity").value.trim() || null };
+  try {
+    if (editingProjectId != null) { await API.updateProject(editingProjectId, data); toast("Project updated."); editingProjectId = null; }
+    else { await API.createProject(data); toast("Project added."); }
+    renderProjectsMaster();
+  } catch (e) { toast("Save failed: " + e.message, true); }
+}
+function editProject(id) { editingProjectId = id; renderProjectsMaster(); }
+function cancelProjectEdit() { editingProjectId = null; renderProjectsMaster(); }
+async function delProject(id) {
+  try { await API.deleteProject(id); toast("Project deleted."); renderProjectsMaster(); }
+  catch (e) { toast("Delete failed: " + e.message, true); }
+}
+
+// --- Leads (master data-entry; the Sales Pipeline Kanban is a separate view
+// over the same Lead rows and is unaffected by this) ---
+let editingLeadId = null;
+function leadClientLabel(projects, clients, projectId) {
+  const pr = projects.find((p) => p.id === projectId);
+  if (!pr) return "—";
+  const cl = clients.find((x) => x.id === pr.client_id);
+  return cl ? cl.name : "—";
+}
+function updateLeadClientLabel() {
+  const pid = parseInt($("nlProject").value, 10);
+  $("nlClient").value = pid ? leadClientLabel(window._leadProjects || [], window._leadClients || [], pid) : "—";
+}
+async function renderLeadsMaster() {
+  const c = $("leadsMasterContent");
+  c.innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    const [rows, projects, clients] = await Promise.all([API.leads(), API.projects(), API.clients()]);
+    window._leadProjects = projects; window._leadClients = clients;
+    const projectName = (id) => { const p = projects.find((x) => x.id === id); return p ? p.name : "—"; };
+    const stageName = ["Leads", "Quoted", "Negotiation", "Won"];
+    const editing = editingLeadId != null;
+    const projectOptions = projects.map((p) => '<option value="' + p.id + '">' + esc(p.name) + "</option>").join("");
+    c.innerHTML =
+      '<div class="card pad" style="margin-bottom:16px"><div class="section-title">' + (editing ? "Edit Lead" : "Add Lead") + '</div><div class="f2">' +
+      '<div class="field"><label>Project</label><select id="nlProject" onchange="updateLeadClientLabel()"><option value="">Select a project…</option>' + projectOptions + "</select></div>" +
+      '<div class="field"><label>Client</label><input id="nlClient" disabled value="—"></div>' +
+      '<div class="field"><label>Name</label><input id="nlName"></div>' +
+      '<div class="field"><label>Owner</label><input id="nlOwner"></div>' +
+      '<div class="field"><label>Stage</label><select id="nlStage"><option value="0">Leads</option><option value="1">Quoted</option><option value="2">Negotiation</option><option value="3">Won</option></select></div>' +
+      '<div class="field"><label>Amount (₹)</label><input id="nlAmount" type="number" value="0"></div></div>' +
+      '<button class="btn primary sm" onclick="saveLead()">' + (editing ? "💾 Update Lead" : "＋ Add Lead") + "</button>" +
+      (editing ? ' <button class="btn ghost sm" onclick="cancelLeadEdit()">Cancel</button>' : "") + "</div>" +
+      '<div class="card pad"><div class="section-title">Leads (' + rows.length + ')</div>' +
+      '<table class="tbl"><thead><tr><th>Project</th><th>Client</th><th>Name</th><th>Owner</th><th>Stage</th><th class="num">Amount</th><th></th>' +
+      (canSeeCost ? "<th></th>" : "") + "</tr></thead><tbody>" +
+      (rows.length ? rows.map((r) => "<tr><td>" + esc(projectName(r.project_id)) + "</td><td>" + esc(leadClientLabel(projects, clients, r.project_id)) +
+        "</td><td>" + esc(r.name) + "</td><td>" + esc(r.owner) + "</td><td>" + stageName[r.stage] +
+        '</td><td class="num">₹' + (r.amount || 0).toLocaleString("en-IN") + '</td><td><button class="btn ghost sm" onclick="editLead(' + r.id + ')">Edit</button></td>' +
+        (canSeeCost ? '<td><button class="del" onclick="delLead(' + r.id + ')">✕</button></td>' : "") + "</tr>").join("")
+        : '<tr><td colspan="8"><div class="empty">No leads yet — add a project first.</div></td></tr>') + "</tbody></table></div>";
+    if (editing) {
+      const r = rows.find((x) => x.id === editingLeadId);
+      if (r) {
+        $("nlProject").value = r.project_id || "";
+        $("nlName").value = r.name || ""; $("nlOwner").value = r.owner || "";
+        $("nlStage").value = r.stage; $("nlAmount").value = r.amount || 0;
+      }
+    }
+    updateLeadClientLabel();
+  } catch (e) { c.innerHTML = '<div class="empty">' + e.message + "</div>"; }
+}
+async function saveLead() {
   const name = $("nlName").value.trim();
+  const projectId = parseInt($("nlProject").value, 10);
   if (!name) { toast("Lead name is required.", true); return; }
-  await API.createLead({ name, owner: $("nlOwner").value.trim() || null, stage: parseInt($("nlStage").value, 10), amount: parseFloat($("nlAmount").value) || 0 });
-  toast("Lead added."); renderMasters(); loadDashboard();
+  if (!projectId) { toast("Select a project.", true); return; }
+  const data = { name, owner: $("nlOwner").value.trim() || null, stage: parseInt($("nlStage").value, 10), amount: parseFloat($("nlAmount").value) || 0, project_id: projectId };
+  try {
+    if (editingLeadId != null) { await API.updateLead(editingLeadId, data); toast("Lead updated."); editingLeadId = null; }
+    else { await API.createLead(data); toast("Lead added."); }
+    renderLeadsMaster(); loadDashboard();
+  } catch (e) { toast("Save failed: " + e.message, true); }
+}
+function editLead(id) { editingLeadId = id; renderLeadsMaster(); }
+function cancelLeadEdit() { editingLeadId = null; renderLeadsMaster(); }
+async function delLead(id) {
+  try { await API.deleteLead(id); toast("Lead deleted."); renderLeadsMaster(); loadDashboard(); }
+  catch (e) { toast("Delete failed: " + e.message, true); }
 }
 
-async function renderTermsMaster(c) {
-  const rows = await API.terms();
-  c.innerHTML =
-    '<div class="card pad" style="margin-bottom:16px"><div class="section-title">Add Terms Template</div>' +
-    '<div class="f2"><div class="field"><label>Name</label><input id="ntName"></div>' +
-    '<div class="field"><label>Kind</label><select id="ntKind"><option value="regular">Regular (Domestic)</option><option value="currency">Currency / International</option></select></div></div>' +
-    '<div class="field"><label>Body</label><textarea id="ntBody" rows="5"></textarea></div>' +
-    '<button class="btn primary sm" onclick="addTerms()">＋ Add Template</button></div>' +
-    rows.map((t) =>
-      '<div class="card pad" style="margin-bottom:12px"><div class="section-title">' + esc(t.name) + ' <span class="badge cli">' + t.kind + "</span></div>" +
-      '<textarea id="tb' + t.id + '" rows="5" style="width:100%;border:1px solid var(--line);border-radius:9px;padding:10px">' + esc(t.body) + "</textarea>" +
-      '<button class="btn ghost sm" style="margin-top:10px" onclick="saveTerms(' + t.id + ",'" + esc(t.name).replace(/'/g, "") + "','" + t.kind + "')\">💾 Save</button></div>").join("");
+// --- Terms ---
+async function renderTermsMaster() {
+  const c = $("termsMasterContent");
+  c.innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    const rows = await API.terms();
+    c.innerHTML =
+      '<div class="card pad" style="margin-bottom:16px"><div class="section-title">Add Terms Template</div>' +
+      '<div class="f2"><div class="field"><label>Name</label><input id="ntName"></div>' +
+      '<div class="field"><label>Kind</label><select id="ntKind"><option value="regular">Regular (Domestic)</option><option value="currency">Currency / International</option></select></div></div>' +
+      '<div class="field"><label>Body</label><textarea id="ntBody" rows="5"></textarea></div>' +
+      '<button class="btn primary sm" onclick="addTerms()">＋ Add Template</button></div>' +
+      rows.map((t) =>
+        '<div class="card pad" style="margin-bottom:12px"><div class="section-title">' + esc(t.name) + ' <span class="badge cli">' + t.kind + "</span></div>" +
+        '<textarea id="tb' + t.id + '" rows="5" style="width:100%;border:1px solid var(--line);border-radius:9px;padding:10px">' + esc(t.body) + "</textarea>" +
+        '<button class="btn ghost sm" style="margin-top:10px" onclick="saveTerms(' + t.id + ",'" + esc(t.name).replace(/'/g, "") + "','" + t.kind + "')\">💾 Save</button></div>").join("");
+  } catch (e) { c.innerHTML = '<div class="empty">' + e.message + "</div>"; }
 }
 async function addTerms() {
   const name = $("ntName").value.trim();
   if (!name) { toast("Template name required.", true); return; }
   await API.createTerms({ name, kind: $("ntKind").value, body: $("ntBody").value });
-  toast("Template added."); renderMasters(); loadTerms();
+  toast("Template added."); renderTermsMaster(); loadTerms();
 }
 async function saveTerms(id, name, kind) {
   await API.updateTerms(id, { name, kind, body: $("tb" + id).value });
   toast("Template saved."); loadTerms();
 }
 
-async function renderEmailMaster(c) {
+// --- Email Setup ---
+async function renderEmailMaster() {
+  const c = $("emailMasterContent");
   if (!canSeeCost) { c.innerHTML = '<div class="empty">Email Setup is manager-only.</div>'; return; }
   let s = {};
   try { s = (await API.getEmailSetup()) || {}; } catch (e) { s = {}; }

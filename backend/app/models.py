@@ -118,6 +118,8 @@ class Lead(Base):
     owner: Mapped[str | None] = mapped_column(String(120), nullable=True)
     stage: Mapped[int] = mapped_column(Integer, default=0)  # 0 Leads..3 Won
     amount: Mapped[float] = mapped_column(Float, default=0.0)
+    project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id"), nullable=True)
+    # Auto-derived from project.client_id on create/update — not set directly.
     client_id: Mapped[int | None] = mapped_column(ForeignKey("clients.id"), nullable=True)
 
 

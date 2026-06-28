@@ -41,7 +41,11 @@
     <button class="nav-item" data-view="preview"><span class="ni">📄</span> Client Preview</button>
     <div class="nav-group">Masters</div>
     <button class="nav-item" data-view="products"><span class="ni">📦</span> Product Catalog</button>
-    <button class="nav-item" data-view="masters"><span class="ni">🗂️</span> Masters</button>
+    <button class="nav-item" data-view="clientsMaster"><span class="ni">🏢</span> Clients</button>
+    <button class="nav-item" data-view="projectsMaster"><span class="ni">📁</span> Projects</button>
+    <button class="nav-item" data-view="leadsMaster"><span class="ni">🧭</span> Leads</button>
+    <button class="nav-item" data-view="termsMaster"><span class="ni">📜</span> Terms</button>
+    <button class="nav-item" data-view="emailMaster" data-cost><span class="ni">✉️</span> Email Setup</button>
     <div class="sb-foot" id="sbFoot">Connected to live pricing engine</div>
   </aside>
   <div class="main">
@@ -150,16 +154,34 @@
         </div>
       </section>
 
-      <!-- Masters -->
-      <section class="view" id="masters">
-        <div class="page-head"><div><h1>Masters</h1><p>Manage clients, leads, terms templates and email setup.</p></div></div>
-        <div class="role-toggle" id="mTabs" style="margin-bottom:16px">
-          <button class="on" data-mtab="clients" onclick="mtab('clients')">Clients</button>
-          <button data-mtab="leads" onclick="mtab('leads')">Leads</button>
-          <button data-mtab="terms" onclick="mtab('terms')">Terms</button>
-          <button data-mtab="email" onclick="mtab('email')" data-cost>Email Setup</button>
-        </div>
-        <div id="mContent"></div>
+      <!-- Clients Master -->
+      <section class="view" id="clientsMaster">
+        <div class="page-head"><div><h1>Clients</h1><p>Companies you quote and sell to.</p></div></div>
+        <div id="clientsMasterContent"></div>
+      </section>
+
+      <!-- Projects Master -->
+      <section class="view" id="projectsMaster">
+        <div class="page-head"><div><h1>Projects</h1><p>Each project belongs to a client; leads are tracked against a project.</p></div></div>
+        <div id="projectsMasterContent"></div>
+      </section>
+
+      <!-- Leads Master -->
+      <section class="view" id="leadsMaster">
+        <div class="page-head"><div><h1>Leads</h1><p>Lead intake, tied to a project (the client is auto-derived). Pipeline stage drives the Sales Pipeline board.</p></div></div>
+        <div id="leadsMasterContent"></div>
+      </section>
+
+      <!-- Terms Master -->
+      <section class="view" id="termsMaster">
+        <div class="page-head"><div><h1>Terms</h1><p>Reusable terms &amp; conditions templates for quotes.</p></div></div>
+        <div id="termsMasterContent"></div>
+      </section>
+
+      <!-- Email Setup -->
+      <section class="view" id="emailMaster">
+        <div class="page-head"><div><h1>Email Setup</h1><p>SMTP configuration used to email quotes to clients.</p></div></div>
+        <div id="emailMasterContent"></div>
       </section>
 
     </div>
@@ -184,7 +206,7 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="api.js?v=4"></script>
-<script src="app.js?v=4"></script>
+<script src="api.js?v=5"></script>
+<script src="app.js?v=5"></script>
 </body>
 </html>

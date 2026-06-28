@@ -12,8 +12,8 @@ from sqlalchemy.orm import Session
 
 from app.db import get_session
 from app.core.security import get_current_user, require_role
-from app.models import Client, Lead, TermsTemplate, EmailSetup, Product
-from app.schemas import ClientIn, LeadIn, TermsIn, EmailSetupIn, ProductUpdate
+from app.models import Client, Project, Lead, TermsTemplate, EmailSetup, Product
+from app.schemas import ClientIn, ProjectIn, LeadIn, TermsIn, EmailSetupIn, ProductUpdate
 from app.core.serialize import product_out
 
 router = APIRouter(prefix="/api/masters", tags=["masters"])
@@ -127,9 +127,63 @@ def delete_client(client_id: int, db: Session = Depends(get_session),
     c = db.get(Client, client_id)
     if not c:
         raise HTTPException(404, "Client not found")
+    n = db.execute(select(Project).where(Project.client_id == client_id)).scalars().all()
+    if n:
+        raise HTTPException(400, f"Cannot delete: {len(n)} project(s) still belong to this client")
     db.delete(c)
     db.commit()
     return {"deleted": client_id}
+
+
+# --- Projects ---
+@router.get("/projects")
+def list_projects(client_id: int | None = None, db: Session = Depends(get_session),
+                  user=Depends(get_current_user)):
+    q = select(Project).order_by(Project.name)
+    if client_id is not None:
+        q = q.where(Project.client_id == client_id)
+    rows = db.execute(q).scalars().all()
+    return [{"id": p.id, "name": p.name, "client_id": p.client_id, "city": p.city} for p in rows]
+
+
+@router.post("/projects")
+def create_project(body: ProjectIn, db: Session = Depends(get_session),
+                   user=Depends(get_current_user)):
+    if not db.get(Client, body.client_id):
+        raise HTTPException(404, "Client not found")
+    p = Project(**body.model_dump())
+    db.add(p)
+    db.commit()
+    db.refresh(p)
+    return {"id": p.id, "name": p.name}
+
+
+@router.put("/projects/{project_id}")
+def update_project(project_id: int, body: ProjectIn, db: Session = Depends(get_session),
+                   user=Depends(get_current_user)):
+    p = db.get(Project, project_id)
+    if not p:
+        raise HTTPException(404, "Project not found")
+    if not db.get(Client, body.client_id):
+        raise HTTPException(404, "Client not found")
+    for k, v in body.model_dump().items():
+        setattr(p, k, v)
+    db.commit()
+    return {"id": p.id, "name": p.name}
+
+
+@router.delete("/projects/{project_id}")
+def delete_project(project_id: int, db: Session = Depends(get_session),
+                   user=Depends(require_role("manager", "admin"))):
+    p = db.get(Project, project_id)
+    if not p:
+        raise HTTPException(404, "Project not found")
+    n = db.execute(select(Lead).where(Lead.project_id == project_id)).scalars().all()
+    if n:
+        raise HTTPException(400, f"Cannot delete: {len(n)} lead(s) still belong to this project")
+    db.delete(p)
+    db.commit()
+    return {"deleted": project_id}
 
 
 # --- Leads / pipeline ---
@@ -137,17 +191,48 @@ def delete_client(client_id: int, db: Session = Depends(get_session),
 def list_leads(db: Session = Depends(get_session), user=Depends(get_current_user)):
     rows = db.execute(select(Lead).order_by(Lead.stage)).scalars().all()
     return [{"id": l.id, "name": l.name, "owner": l.owner, "stage": l.stage,
-             "amount": l.amount, "client_id": l.client_id} for l in rows]
+             "amount": l.amount, "project_id": l.project_id, "client_id": l.client_id}
+            for l in rows]
 
 
 @router.post("/leads")
 def create_lead(body: LeadIn, db: Session = Depends(get_session),
                 user=Depends(get_current_user)):
-    l = Lead(**body.model_dump())
+    project = db.get(Project, body.project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    l = Lead(**body.model_dump(), client_id=project.client_id)
     db.add(l)
     db.commit()
     db.refresh(l)
     return {"id": l.id, "name": l.name, "stage": l.stage}
+
+
+@router.put("/leads/{lead_id}")
+def update_lead(lead_id: int, body: LeadIn, db: Session = Depends(get_session),
+                user=Depends(get_current_user)):
+    l = db.get(Lead, lead_id)
+    if not l:
+        raise HTTPException(404, "Lead not found")
+    project = db.get(Project, body.project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    for k, v in body.model_dump().items():
+        setattr(l, k, v)
+    l.client_id = project.client_id
+    db.commit()
+    return {"id": l.id, "name": l.name, "stage": l.stage}
+
+
+@router.delete("/leads/{lead_id}")
+def delete_lead(lead_id: int, db: Session = Depends(get_session),
+                user=Depends(require_role("manager", "admin"))):
+    l = db.get(Lead, lead_id)
+    if not l:
+        raise HTTPException(404, "Lead not found")
+    db.delete(l)
+    db.commit()
+    return {"deleted": lead_id}
 
 
 @router.patch("/leads/{lead_id}/stage")

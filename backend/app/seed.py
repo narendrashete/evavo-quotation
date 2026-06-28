@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
-from app.models import User, FxRate, TermsTemplate, Lead
+from app.models import User, FxRate, TermsTemplate, Client, Project, Lead
 
 DEFAULT_USERS = [
     ("Alan Sales", "sales@evavo.test", "sales123", "sales"),
@@ -32,7 +32,34 @@ def seed(db: Session) -> None:
         for cur, rate, kind in DEFAULT_FX:
             db.add(FxRate(currency=cur, rate_to_inr=rate, kind=kind))
 
+    # Demo Clients + Projects, so the Client/Project/Lead hierarchy isn't empty
+    # out of the box. A couple of the demo Leads below are linked to these via
+    # project_id (Lead.client_id is then auto-derived), the rest stay
+    # unlinked (project_id=None) to show what that looks like in the UI.
+    client_by_name: dict[str, Client] = {}
+    if not db.execute(select(Client)).first():
+        for name, city in [("Aqua Bliss Spa", "Goa"), ("Ghareni Spa & Salon", "Mumbai")]:
+            c = Client(name=name, city=city)
+            db.add(c)
+            client_by_name[name] = c
+        db.flush()  # assign ids before Projects reference them
+
+    project_by_name: dict[str, Project] = {}
+    if client_by_name and not db.execute(select(Project)).first():
+        for name, client_name, city in [
+            ("Aqua Bliss Spa - Salon Fitout", "Aqua Bliss Spa", "Goa"),
+            ("Ghareni Spa & Salon - Master Quote", "Ghareni Spa & Salon", "Mumbai"),
+        ]:
+            p = Project(name=name, client_id=client_by_name[client_name].id, city=city)
+            db.add(p)
+            project_by_name[name] = p
+        db.flush()
+
     if not db.execute(select(Lead)).first():
+        linked = {
+            "Aqua Bliss Spa": "Aqua Bliss Spa - Salon Fitout",
+            "Ghareni Spa & Salon": "Ghareni Spa & Salon - Master Quote",
+        }
         for name, owner, stage, amount in [
             ("Aqua Bliss Spa", "Parth", 0, 1240000),
             ("Zen Retreat Resort", "Riya", 0, 860000),
@@ -42,7 +69,10 @@ def seed(db: Session) -> None:
             ("Urban Glow Salon", "Riya", 2, 540000),
             ("Serenity Day Spa", "Alan", 3, 410000),
         ]:
-            db.add(Lead(name=name, owner=owner, stage=stage, amount=amount))
+            project = project_by_name.get(linked.get(name))
+            db.add(Lead(name=name, owner=owner, stage=stage, amount=amount,
+                        project_id=project.id if project else None,
+                        client_id=project.client_id if project else None))
 
     if not db.execute(select(TermsTemplate)).first():
         db.add(TermsTemplate(
