@@ -34,7 +34,8 @@ def _money(amount_inr: float, rate_to_inr: float, code: str) -> str:
 def build_quote_pdf(preview: dict, *, currency: str = "INR",
                     rate_to_inr: float = 1.0, terms_body: str = "",
                     quote_date: str | None = None,
-                    bill_to_name: str = "", bill_to_email: str = "") -> bytes:
+                    bill_to_name: str = "", bill_to_email: str = "",
+                    bill_to_address: str = "") -> bytes:
     """`preview` is the dict from serialize.client_preview_out (no cost fields)."""
     pdf = FPDF(unit="mm", format="A4")
     pdf.set_auto_page_break(auto=True, margin=18)
@@ -81,6 +82,10 @@ def build_quote_pdf(preview: dict, *, currency: str = "INR",
     pdf.set_text_color(70, 88, 106)
     if bill_to_email or preview.get("customer_email"):
         pdf.cell(120, 5, bill_to_email or preview.get("customer_email", ""), 0, 2, "L")
+    address = bill_to_address or preview.get("customer_address") or ""
+    address_lines = [ln for ln in address.splitlines() if ln.strip()][:2]
+    for ln in address_lines:
+        pdf.cell(120, 5, ln, 0, 2, "L")
     pdf.set_xy(pdf.w - 90, 42)
     pdf.set_text_color(*MUTED)
     pdf.set_font("Helvetica", "B", 8)
@@ -90,7 +95,7 @@ def build_quote_pdf(preview: dict, *, currency: str = "INR",
     pdf.cell(80, 6, currency, 0, 0, "R")
 
     # --- Line items table ---
-    pdf.set_xy(10, 66)
+    pdf.set_xy(10, 66 + 5 * len(address_lines))
     cols = [(12, "#", "C"), (W - 12 - 38 - 18 - 38, "ITEM", "L"),
             (38, "UNIT PRICE", "R"), (18, "QTY", "R"), (38, "AMOUNT", "R")]
     pdf.set_fill_color(*HEADBG)

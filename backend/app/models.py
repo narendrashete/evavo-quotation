@@ -121,6 +121,8 @@ class Lead(Base):
     project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id"), nullable=True)
     # Auto-derived from project.client_id on create/update — not set directly.
     client_id: Mapped[int | None] = mapped_column(ForeignKey("clients.id"), nullable=True)
+    # Site/installation address — may differ from the Client's registered address.
+    address: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class TermsTemplate(Base):
@@ -151,6 +153,7 @@ class Quote(Base):
     client_id: Mapped[int | None] = mapped_column(ForeignKey("clients.id"), nullable=True)
     customer_name: Mapped[str] = mapped_column(String(200))
     customer_email: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    customer_address: Mapped[str | None] = mapped_column(Text, nullable=True)
     currency: Mapped[str] = mapped_column(String(3), default="INR")
     status: Mapped[str] = mapped_column(String(20), default="draft")  # draft|sent|negotiation|won
     terms_template_id: Mapped[int | None] = mapped_column(

@@ -43,6 +43,7 @@ def _render_pdf(db: Session, quote: Quote) -> bytes:
         rate_to_inr=_display_rate(db, quote.currency),
         terms_body=_terms_body(db, quote),
         bill_to_name=quote.customer_name, bill_to_email=quote.customer_email or "",
+        bill_to_address=quote.customer_address or "",
     )
 
 
@@ -94,6 +95,7 @@ def create_quote(body: QuoteCreate, db: Session = Depends(get_session),
     quote = Quote(
         quote_no=_next_quote_no(db), client_id=body.client_id,
         customer_name=body.customer_name, customer_email=body.customer_email,
+        customer_address=body.customer_address,
         currency=body.currency, terms_template_id=body.terms_template_id,
         install_enabled=body.install_enabled, install_pct=body.install_pct,
         packaging=body.packaging, freight=body.freight,
@@ -200,6 +202,7 @@ def revise_quote(quote_id: int, db: Session = Depends(get_session),
     rev = Quote(
         quote_no=_next_quote_no(db), client_id=src.client_id,
         customer_name=src.customer_name, customer_email=src.customer_email,
+        customer_address=src.customer_address,
         currency=src.currency, terms_template_id=src.terms_template_id,
         install_enabled=src.install_enabled, install_pct=src.install_pct,
         packaging=src.packaging, freight=src.freight,

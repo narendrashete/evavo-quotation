@@ -55,6 +55,7 @@ class QuoteLineIn(BaseModel):
 class QuoteCreate(BaseModel):
     customer_name: str
     customer_email: Optional[str] = None
+    customer_address: Optional[str] = None
     client_id: Optional[int] = None
     currency: str = "INR"
     terms_template_id: Optional[int] = None
@@ -91,6 +92,7 @@ class LeadIn(BaseModel):
     stage: int = 0
     amount: float = 0.0
     project_id: int
+    address: Optional[str] = None
 
 
 class TermsIn(BaseModel):

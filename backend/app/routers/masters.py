@@ -191,7 +191,8 @@ def delete_project(project_id: int, db: Session = Depends(get_session),
 def list_leads(db: Session = Depends(get_session), user=Depends(get_current_user)):
     rows = db.execute(select(Lead).order_by(Lead.stage)).scalars().all()
     return [{"id": l.id, "name": l.name, "owner": l.owner, "stage": l.stage,
-             "amount": l.amount, "project_id": l.project_id, "client_id": l.client_id}
+             "amount": l.amount, "project_id": l.project_id, "client_id": l.client_id,
+             "address": l.address}
             for l in rows]
 
 

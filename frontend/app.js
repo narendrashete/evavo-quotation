@@ -13,6 +13,8 @@ const SYM = { INR: "₹", USD: "$", EUR: "€" };
 let TERMS = [];
 let currentQuoteId = null;
 let lastPreview = null;     // server client-preview payload after save
+let BUILDER_LEADS = [], BUILDER_PROJECTS = [], BUILDER_CLIENTS = [];
+let selectedClientId = null;  // resolved from the picked Lead, sent with the quote
 
 const CATCOLOR = {
   "Salon Equipment": ["#1a9fe0", "#0d6efd"], "Massage Beds": ["#13b3a6", "#0f9488"],
@@ -90,7 +92,7 @@ async function boot() {
   $("userAvatar").textContent = currentUser.name.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
   applyRoleVisibility();
 
-  await Promise.all([loadFx(), loadTerms(), loadProducts()]);
+  await Promise.all([loadFx(), loadTerms(), loadProducts(), loadBuilderLeads()]);
   buildCurrencyOptions();
   buildCategoryOptions();
   renderProducts();
@@ -116,6 +118,35 @@ async function loadFx() {
   const rows = await API.fx();
   FX = { INR: 1 };
   rows.filter((r) => r.kind === "display").forEach((r) => { FX[r.currency] = r.rate_to_inr; });
+}
+// Lead → Project → Client lookup for the Quote Builder's Lead selector.
+async function loadBuilderLeads() {
+  [BUILDER_LEADS, BUILDER_PROJECTS, BUILDER_CLIENTS] =
+    await Promise.all([API.leads(), API.projects(), API.clients()]);
+  const sel = $("qLead"); if (!sel) return;
+  sel.innerHTML = '<option value="">— none, enter manually —</option>';
+  BUILDER_LEADS.forEach((l) => {
+    const p = BUILDER_PROJECTS.find((x) => x.id === l.project_id);
+    const o = document.createElement("option");
+    o.value = l.id; o.textContent = l.name + (p ? " — " + p.name : "");
+    sel.appendChild(o);
+  });
+}
+function onLeadSelected() {
+  const id = parseInt($("qLead").value, 10);
+  const info = $("qLeadInfo");
+  if (!id) { selectedClientId = null; info.textContent = ""; return; }
+  const lead = BUILDER_LEADS.find((l) => l.id === id);
+  const project = lead && BUILDER_PROJECTS.find((p) => p.id === lead.project_id);
+  const client = project && BUILDER_CLIENTS.find((c) => c.id === project.client_id);
+  if (!project || !client) { selectedClientId = null; info.textContent = "This lead has no project/client linked yet."; return; }
+  selectedClientId = client.id;
+  $("qCustomer").value = client.name;
+  $("qEmail").value = client.email || "";
+  $("qAddress").value = lead.address || "";
+  info.textContent = "Project: " + project.name + " · Client: " + client.name +
+    (client.city ? " · " + client.city : "") + " · GSTIN: " + (client.gstin || "—") +
+    " · Phone: " + (client.phone || "—");
 }
 function buildCurrencyOptions() {
   const sel = $("curSel"); sel.innerHTML = "";
@@ -157,8 +188,9 @@ document.querySelectorAll(".nav-item,.bottomnav button").forEach((b) => {
   if (b.dataset.view) b.addEventListener("click", () => goto(b.dataset.view));
 });
 function newQuote() {
-  LINES = []; currentQuoteId = null; lastPreview = null;
+  LINES = []; currentQuoteId = null; lastPreview = null; selectedClientId = null;
   $("builderSub").textContent = "New draft";
+  $("qLead").value = ""; $("qAddress").value = ""; $("qLeadInfo").textContent = "";
   renderItems(); recalc(); updateCart(); goto("builder");
 }
 
@@ -305,6 +337,8 @@ async function saveQuote() {
     const payload = {
       customer_name: $("qCustomer").value.trim(),
       customer_email: $("qEmail").value.trim() || null,
+      customer_address: $("qAddress").value.trim() || null,
+      client_id: selectedClientId,
       currency: cur(),
       terms_template_id: parseInt($("qTerms").value, 10) || null,
       install_enabled: $("aInstall").checked,
@@ -332,7 +366,9 @@ function renderPreview() {
   const termId = parseInt($("qTerms").value, 10);
   const term = TERMS.find((t) => t.id === termId) || TERMS[0];
   $("pvTerms").innerHTML = "<b>Terms &amp; Conditions</b>\n" + (term ? term.body : "") + "\n\n<b>Evavo Wellness &amp; Solutions LLP</b>";
-  $("pvBillTo").innerHTML = "<br>" + $("qCustomer").value + "<br>" + ($("qEmail").value || "");
+  const addr = $("qAddress").value.trim();
+  $("pvBillTo").innerHTML = "<br>" + esc($("qCustomer").value) + "<br>" + esc($("qEmail").value || "") +
+    (addr ? "<br>" + esc(addr).replace(/\n/g, "<br>") : "");
   $("pvCur").textContent = cur() + " (" + SYM[cur()] + ")";
 
   // Prefer the server's client-safe payload after a save; else compute locally.
@@ -538,7 +574,8 @@ async function renderLeadsMaster() {
       '<div class="field"><label>Name</label><input id="nlName"></div>' +
       '<div class="field"><label>Owner</label><input id="nlOwner"></div>' +
       '<div class="field"><label>Stage</label><select id="nlStage"><option value="0">Leads</option><option value="1">Quoted</option><option value="2">Negotiation</option><option value="3">Won</option></select></div>' +
-      '<div class="field"><label>Amount (₹)</label><input id="nlAmount" type="number" value="0"></div></div>' +
+      '<div class="field"><label>Amount (₹)</label><input id="nlAmount" type="number" value="0"></div>' +
+      '<div class="field" style="grid-column:1/-1"><label>Address (site/installation — may differ from the client\'s registered address)</label><textarea id="nlAddress" rows="2"></textarea></div></div>' +
       '<button class="btn primary sm" onclick="saveLead()">' + (editing ? "💾 Update Lead" : "＋ Add Lead") + "</button>" +
       (editing ? ' <button class="btn ghost sm" onclick="cancelLeadEdit()">Cancel</button>' : "") + "</div>" +
       '<div class="card pad"><div class="section-title">Leads (' + rows.length + ')</div>' +
@@ -555,6 +592,7 @@ async function renderLeadsMaster() {
         $("nlProject").value = r.project_id || "";
         $("nlName").value = r.name || ""; $("nlOwner").value = r.owner || "";
         $("nlStage").value = r.stage; $("nlAmount").value = r.amount || 0;
+        $("nlAddress").value = r.address || "";
       }
     }
     updateLeadClientLabel();
@@ -565,7 +603,7 @@ async function saveLead() {
   const projectId = parseInt($("nlProject").value, 10);
   if (!name) { toast("Lead name is required.", true); return; }
   if (!projectId) { toast("Select a project.", true); return; }
-  const data = { name, owner: $("nlOwner").value.trim() || null, stage: parseInt($("nlStage").value, 10), amount: parseFloat($("nlAmount").value) || 0, project_id: projectId };
+  const data = { name, owner: $("nlOwner").value.trim() || null, stage: parseInt($("nlStage").value, 10), amount: parseFloat($("nlAmount").value) || 0, project_id: projectId, address: $("nlAddress").value.trim() || null };
   try {
     if (editingLeadId != null) { await API.updateLead(editingLeadId, data); toast("Lead updated."); editingLeadId = null; }
     else { await API.createLead(data); toast("Lead added."); }
