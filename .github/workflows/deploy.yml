@@ -26,6 +26,12 @@ jobs:
             source .venv/bin/activate
             pip install -r requirements.txt
 
+            # .env.production is only auto-loaded by systemd (EnvironmentFile=);
+            # export it here so manage.py sees the same PG_* settings as the live service.
+            set -a
+            source .env.production
+            set +a
+
             # Apply any schema changes (idempotent: creates missing tables only)
             python manage.py init-db
 
