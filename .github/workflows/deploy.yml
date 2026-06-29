@@ -31,6 +31,8 @@ jobs:
             set -a
             source .env.production
             set +a
+            echo "EVAVO_DATABASE_URL prefix: ${EVAVO_DATABASE_URL:0:15}"
+            ls -la .env .env.production 2>&1 || true
 
             # Apply any schema changes (idempotent: creates missing tables only)
             python manage.py init-db
