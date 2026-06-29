@@ -60,6 +60,7 @@ table.tbl{width:100%;border-collapse:collapse}
 table.tbl th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);padding:10px 12px;border-bottom:1px solid var(--line)}
 table.tbl td{padding:11px 12px;border-bottom:1px solid var(--line);font-size:13.5px}
 table.tbl tr:last-child td{border-bottom:0}
+#recentQuotes tr:hover td{background:#f5f8fb}
 .st{font-size:11px;font-weight:700;padding:3px 9px;border-radius:20px}
 .st.draft{background:#eef2f6;color:#5b6b7b}
 .st.sent{background:#e7f1fb;color:var(--blue-deep)}

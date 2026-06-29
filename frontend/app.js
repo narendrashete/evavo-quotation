@@ -429,6 +429,24 @@ async function emailCurrent() {
     toast(r.dry_run ? "Dry run — configure Email Setup to actually send (to " + r.to + ")" : "Emailed to " + r.to);
   } catch (e) { toast("Email failed: " + e.message, true); }
 }
+async function openQuote(id) {
+  try {
+    const q = await API.getQuote(id);
+    lastPreview = await API.previewQuote(id);
+    currentQuoteId = q.id;
+    LINES = q.lines.map((l) => ({ pid: l.product_id, qty: l.qty, disc: l.line_disc }));
+    $("qCustomer").value = q.customer_name || "";
+    $("qEmail").value = q.customer_email || "";
+    $("qAddress").value = q.customer_address || "";
+    $("qLead").value = ""; $("qLeadInfo").textContent = ""; selectedClientId = null;
+    if (q.terms_template_id != null) $("qTerms").value = q.terms_template_id;
+    if (q.currency && $("curSel").querySelector('option[value="' + q.currency + '"]')) $("curSel").value = q.currency;
+    $("builderSub").textContent = q.quote_no + " · " + q.status.charAt(0).toUpperCase() + q.status.slice(1);
+    renderItems(); recalc(); updateCart();
+    goto("preview");
+    toast("Opened " + q.quote_no);
+  } catch (e) { toast("Open failed: " + e.message, true); }
+}
 async function reviseCurrent() {
   if (!requireSaved()) return;
   try {
@@ -761,9 +779,12 @@ function renderRecentQuotes(quotes) {
   if (!quotes.length) { b.innerHTML = '<tr><td colspan="4"><div class="empty">No quotes yet — create one.</div></td></tr>'; return; }
   quotes.slice(0, 6).forEach((q) => {
     const tr = document.createElement("tr");
+    tr.style.cursor = "pointer";
+    tr.title = "Open " + q.quote_no;
     tr.innerHTML = "<td>" + q.quote_no + "</td><td>" + q.customer_name + '</td><td class="num">₹' +
       Math.round(q.grand_total).toLocaleString("en-IN") + '</td><td><span class="st ' + q.status + '">' +
       q.status.charAt(0).toUpperCase() + q.status.slice(1) + "</span></td>";
+    tr.onclick = () => openQuote(q.id);
     b.appendChild(tr);
   });
 }
