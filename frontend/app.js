@@ -799,6 +799,17 @@ function renderPipelineBars(leads) {
       Math.round(totals[i] / max * 100) + "%;background:" + STAGE_COL[i] + '"></div></div></div>';
   });
 }
+async function refreshLiveRates() {
+  const btn = $("btnRefreshFx");
+  btn.disabled = true; const old = btn.textContent; btn.textContent = "Refreshing…";
+  try {
+    await API.refreshFx();
+    await loadFx();
+    renderFxRows();
+    toast("Live FX rates refreshed.");
+  } catch (e) { toast("Refresh failed: " + e.message, true); }
+  finally { btn.disabled = false; btn.textContent = old; }
+}
 function renderFxRows() {
   const b = $("fxRows"); b.innerHTML = "";
   ["USD", "EUR"].forEach((c) => { if (FX[c]) b.innerHTML += "<tr><td>1 " + c + '</td><td class="num">₹ ' + FX[c].toFixed(2) + "</td></tr>"; });

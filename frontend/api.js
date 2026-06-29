@@ -41,6 +41,7 @@ const API = (() => {
     products: (q, cat) => request("GET",
       "/api/products" + qs({ q, category: cat })),
     fx: () => request("GET", "/api/fx"),
+    refreshFx: () => request("POST", "/api/fx/refresh"),
     leads: () => request("GET", "/api/masters/leads"),
     terms: () => request("GET", "/api/masters/terms"),
     quotes: () => request("GET", "/api/quotes"),

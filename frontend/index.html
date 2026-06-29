@@ -63,7 +63,10 @@
           <div class="card pad">
             <div class="section-title">Pipeline by Stage</div>
             <div class="mini-bars" id="pipelineBars"></div>
-            <div style="margin-top:18px" class="section-title">FX Rates <span class="badge cli">live table</span></div>
+            <div style="margin-top:18px;display:flex;justify-content:space-between;align-items:center" class="section-title">
+              <span>FX Rates <span class="badge cli">live table</span></span>
+              <button class="btn ghost sm" id="btnRefreshFx" data-cost onclick="refreshLiveRates()">🔄 Refresh Live Rates</button>
+            </div>
             <table class="tbl"><tbody id="fxRows"></tbody></table>
           </div>
         </div>
