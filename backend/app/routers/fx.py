@@ -14,7 +14,7 @@ from app.schemas import FxRateIn, FxRateOut
 
 router = APIRouter(prefix="/api/fx", tags=["fx"])
 
-FRANKFURTER_URL = "https://api.frankfurter.app/latest"
+FRANKFURTER_URL = "https://api.frankfurter.dev/v1/latest"
 
 
 def _out(r: FxRate) -> FxRateOut:
@@ -61,7 +61,7 @@ def refresh_fx(db: Session = Depends(get_session),
     decision (see CLAUDE.md). All-or-nothing: if either currency fetch fails,
     nothing is written.
     """
-    with httpx.Client(timeout=8.0) as client:
+    with httpx.Client(timeout=8.0, follow_redirects=True) as client:
         rates = {ccy: _fetch_live_rate(client, ccy) for ccy in ("USD", "EUR")}
 
     rows = [FxRate(currency=ccy, rate_to_inr=rate, kind="display") for ccy, rate in rates.items()]
