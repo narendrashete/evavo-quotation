@@ -24,7 +24,11 @@ def _out(r: FxRate) -> FxRateOut:
 
 @router.get("", response_model=list[FxRateOut])
 def list_fx(db: Session = Depends(get_session), user=Depends(get_current_user)):
-    rows = db.execute(select(FxRate).order_by(FxRate.effective_date.desc())).scalars().all()
+    # id DESC as a tiebreaker: multiple rates can be added on the same
+    # calendar day, and effective_date alone doesn't disambiguate "newest".
+    rows = db.execute(
+        select(FxRate).order_by(FxRate.effective_date.desc(), FxRate.id.desc())
+    ).scalars().all()
     return [_out(r) for r in rows]
 
 

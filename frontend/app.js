@@ -114,9 +114,14 @@ async function loadTerms() {
   TERMS.forEach((t) => { const o = document.createElement("option"); o.value = t.id; o.textContent = t.name; sel.appendChild(o); });
 }
 async function loadFx() {
+  // API returns rows newest-first (effective_date DESC); keep only the first
+  // (= latest) row per currency so an older dated rate can't overwrite a
+  // newer one once multiple dated rows exist for the same currency.
   const rows = await API.fx();
   FX = { INR: 1 };
-  rows.filter((r) => r.kind === "display").forEach((r) => { FX[r.currency] = r.rate_to_inr; });
+  rows.filter((r) => r.kind === "display").forEach((r) => {
+    if (!(r.currency in FX)) FX[r.currency] = r.rate_to_inr;
+  });
 }
 // Lead → Project → Client lookup for the Quote Builder's Lead selector.
 async function loadBuilderLeads() {

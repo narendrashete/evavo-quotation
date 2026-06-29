@@ -25,7 +25,10 @@ def _display_rate(db: Session, currency: str) -> float:
         return 1.0
     r = db.execute(
         select(FxRate).where(FxRate.currency == currency, FxRate.kind == "display")
-        .order_by(FxRate.effective_date.desc())).scalars().first()
+        # id DESC as a tiebreaker: multiple rates can now be added on the same
+        # calendar day (e.g. clicking "Refresh Live Rates" more than once),
+        # and effective_date alone doesn't disambiguate which is newest.
+        .order_by(FxRate.effective_date.desc(), FxRate.id.desc())).scalars().first()
     return r.rate_to_inr if r else 1.0
 
 
