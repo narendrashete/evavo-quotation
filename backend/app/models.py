@@ -98,6 +98,8 @@ class Client(Base):
     name: Mapped[str] = mapped_column(String(200), index=True)
     email: Mapped[str | None] = mapped_column(String(200), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # Mobile/WhatsApp number — default source for a quote's WhatsApp contact.
+    mobile: Mapped[str | None] = mapped_column(String(40), nullable=True)
     city: Mapped[str | None] = mapped_column(String(120), nullable=True)
     address: Mapped[str | None] = mapped_column(Text, nullable=True)
     gstin: Mapped[str | None] = mapped_column(String(20), nullable=True)
@@ -123,6 +125,8 @@ class Lead(Base):
     client_id: Mapped[int | None] = mapped_column(ForeignKey("clients.id"), nullable=True)
     # Site/installation address — may differ from the Client's registered address.
     address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # WhatsApp contact override — may differ from the Client's registered mobile.
+    whatsapp_number: Mapped[str | None] = mapped_column(String(40), nullable=True)
 
 
 class TermsTemplate(Base):
@@ -154,6 +158,10 @@ class Quote(Base):
     customer_name: Mapped[str] = mapped_column(String(200))
     customer_email: Mapped[str | None] = mapped_column(String(200), nullable=True)
     customer_address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    customer_mobile: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # Unauthenticated share link token for the client-safe PDF (WhatsApp/email).
+    share_token: Mapped[str | None] = mapped_column(
+        String(48), unique=True, index=True, nullable=True)
     currency: Mapped[str] = mapped_column(String(3), default="INR")
     status: Mapped[str] = mapped_column(String(20), default="draft")  # draft|sent|negotiation|won
     terms_template_id: Mapped[int | None] = mapped_column(

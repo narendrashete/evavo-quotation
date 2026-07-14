@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import logging
+import re
+import secrets
 from datetime import date
+from urllib.parse import quote as urlquote
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.db import get_session
 from app.core.security import get_current_user, can_see_cost
 from app.core.serialize import quote_out, client_preview_out, product_engine_price
@@ -18,6 +23,7 @@ from app.services.pdf import build_quote_pdf
 from app.services.email import send_quote_email
 
 router = APIRouter(prefix="/api/quotes", tags=["quotes"])
+logger = logging.getLogger(__name__)
 
 
 def _display_rate(db: Session, currency: str) -> float:
@@ -48,6 +54,34 @@ def _render_pdf(db: Session, quote: Quote) -> bytes:
         bill_to_name=quote.customer_name, bill_to_email=quote.customer_email or "",
         bill_to_address=quote.customer_address or "",
     )
+
+
+def _share_link(quote: Quote, request: Request) -> str:
+    base = settings.app_public_url.rstrip("/") if settings.app_public_url else str(request.base_url).rstrip("/")
+    return f"{base}/api/quotes/share/{quote.share_token}/pdf"
+
+
+def _quote_message(quote: Quote, request: Request) -> str:
+    return (
+        f"Dear {quote.customer_name},\n\n"
+        f"Please find your quotation {quote.quote_no} "
+        f"({quote.created_at.strftime('%d %b %Y')}).\n\n"
+        f"Grand Total: {quote.currency} {quote.grand_total:,.2f}\n\n"
+        f"View/download: {_share_link(quote, request)}\n\n"
+        f"For queries or to proceed, reply to this message.\n\n"
+        f"Regards,\nEvavo Wellness & Solutions LLP"
+    )
+
+
+def _wa_digits(phone: str) -> str:
+    """Best-effort E.164-ish digits for a wa.me link. Defaults bare 10-digit
+    numbers to India (+91) since that's this app's only market today."""
+    digits = re.sub(r"\D", "", phone)
+    if len(digits) == 10:
+        return "91" + digits
+    if len(digits) == 11 and digits.startswith("0"):
+        return "91" + digits[1:]
+    return digits
 
 
 def _fy_code(today: date | None = None) -> str:
@@ -98,7 +132,8 @@ def create_quote(body: QuoteCreate, db: Session = Depends(get_session),
     quote = Quote(
         quote_no=_next_quote_no(db), client_id=body.client_id,
         customer_name=body.customer_name, customer_email=body.customer_email,
-        customer_address=body.customer_address,
+        customer_address=body.customer_address, customer_mobile=body.customer_mobile,
+        share_token=secrets.token_urlsafe(24),
         currency=body.currency, terms_template_id=body.terms_template_id,
         install_enabled=body.install_enabled, install_pct=body.install_pct,
         packaging=body.packaging, freight=body.freight,
@@ -172,7 +207,7 @@ def quote_pdf(quote_id: int, db: Session = Depends(get_session),
 
 
 @router.post("/{quote_id}/email")
-def quote_email(quote_id: int, db: Session = Depends(get_session),
+def quote_email(quote_id: int, request: Request, db: Session = Depends(get_session),
                 user=Depends(get_current_user)):
     q = db.get(Quote, quote_id)
     if not q:
@@ -183,16 +218,56 @@ def quote_email(quote_id: int, db: Session = Depends(get_session),
         raise HTTPException(422, "Quote has no client email address")
     pdf = _render_pdf(db, q)
     setup = db.execute(select(EmailSetup)).scalars().first()
-    result = send_quote_email(
-        setup, to_email=q.customer_email,
-        subject=f"Quotation {q.quote_no} - Evavo Wellness & Solutions LLP",
-        body=(f"Dear {q.customer_name},\n\nPlease find attached our quotation "
-              f"{q.quote_no}.\n\nRegards,\nEvavo Wellness & Solutions LLP"),
-        pdf_bytes=pdf, pdf_name=q.quote_no.replace("/", "_") + ".pdf")
+    try:
+        result = send_quote_email(
+            setup, to_email=q.customer_email,
+            subject=f"Quotation {q.quote_no} - Evavo Wellness & Solutions LLP",
+            body=_quote_message(q, request),
+            pdf_bytes=pdf, pdf_name=q.quote_no.replace("/", "_") + ".pdf")
+    except Exception as exc:
+        raise HTTPException(502, f"Failed to send email: {exc}")
     if result.get("sent") and q.status == "draft":
         q.status = "sent"
         db.commit()
     return result
+
+
+@router.post("/{quote_id}/whatsapp")
+def quote_whatsapp(quote_id: int, request: Request, db: Session = Depends(get_session),
+                   user=Depends(get_current_user)):
+    """Build a free wa.me click-to-chat link — no paid API, opened client-side."""
+    q = db.get(Quote, quote_id)
+    if not q:
+        raise HTTPException(404, "Quote not found")
+    if q.needs_approval and not can_see_cost(user.role):
+        raise HTTPException(403, "Quote needs manager approval before it can be sent")
+    if not q.customer_mobile:
+        raise HTTPException(
+            422, "Add a WhatsApp/mobile number for this customer (Customer Master "
+                 "or this quote's WhatsApp field) before sending.")
+    digits = _wa_digits(q.customer_mobile)
+    if not digits:
+        raise HTTPException(422, "The WhatsApp number on this quote looks invalid.")
+    text = _quote_message(q, request)
+    url = f"https://wa.me/{digits}?text={urlquote(text)}"
+    logger.info("WhatsApp link built: quote_no=%s phone=%s", q.quote_no, digits)
+    return {"url": url, "phone": digits}
+
+
+@router.get("/share/{token}/pdf")
+def quote_share_pdf(token: str, db: Session = Depends(get_session)):
+    """Public, unauthenticated, client-safe PDF — no login required.
+
+    Looked up by an unguessable share token, not the quote id. Always built
+    from the client-preview payload, so cost/margin can never appear here.
+    """
+    q = db.execute(select(Quote).where(Quote.share_token == token)).scalars().first()
+    if not q:
+        raise HTTPException(404, "Quote not found")
+    pdf = _render_pdf(db, q)
+    fname = q.quote_no.replace("/", "_") + ".pdf"
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{fname}"'})
 
 
 @router.post("/{quote_id}/revise")
@@ -205,7 +280,8 @@ def revise_quote(quote_id: int, db: Session = Depends(get_session),
     rev = Quote(
         quote_no=_next_quote_no(db), client_id=src.client_id,
         customer_name=src.customer_name, customer_email=src.customer_email,
-        customer_address=src.customer_address,
+        customer_address=src.customer_address, customer_mobile=src.customer_mobile,
+        share_token=secrets.token_urlsafe(24),
         currency=src.currency, terms_template_id=src.terms_template_id,
         install_enabled=src.install_enabled, install_pct=src.install_pct,
         packaging=src.packaging, freight=src.freight,

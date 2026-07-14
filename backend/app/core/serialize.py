@@ -82,7 +82,7 @@ def quote_out(quote, include_cost: bool) -> dict:
     out = {
         "id": quote.id, "quote_no": quote.quote_no, "status": quote.status,
         "customer_name": quote.customer_name, "customer_email": quote.customer_email,
-        "customer_address": quote.customer_address,
+        "customer_address": quote.customer_address, "customer_mobile": quote.customer_mobile,
         "currency": quote.currency, "terms_template_id": quote.terms_template_id,
         "install_enabled": quote.install_enabled, "install_pct": quote.install_pct,
         "packaging": quote.packaging, "freight": quote.freight,

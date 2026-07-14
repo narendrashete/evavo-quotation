@@ -80,6 +80,10 @@ class Settings(_Base):
     # Full SQLAlchemy URL override (e.g. sqlite:///./evavo_dev.db) for lightweight
     # local/demo runs without a SQL Server. Takes precedence over db_* when set.
     database_url: str = ""
+    # Optional: public base URL (e.g. https://quotation.evavo.in) used to build
+    # quote share links for WhatsApp/email. Falls back to the request's own
+    # host if unset — only needed to force a specific domain/scheme.
+    app_public_url: str = ""
 
     def _odbc(self, database: str) -> str:
         return urllib.parse.quote_plus(

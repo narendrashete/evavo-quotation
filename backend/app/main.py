@@ -10,7 +10,10 @@ Phase 2 mounts the auth / products / quotes / masters routers here.
 
 from __future__ import annotations
 
+import logging
 import os
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware

@@ -96,7 +96,8 @@ def update_product(product_id: int, body: ProductUpdate, db: Session = Depends(g
 def list_clients(db: Session = Depends(get_session), user=Depends(get_current_user)):
     rows = db.execute(select(Client).order_by(Client.name)).scalars().all()
     return [{"id": c.id, "name": c.name, "email": c.email, "phone": c.phone,
-             "city": c.city, "address": c.address, "gstin": c.gstin} for c in rows]
+             "mobile": c.mobile, "city": c.city, "address": c.address,
+             "gstin": c.gstin} for c in rows]
 
 
 @router.post("/clients")
@@ -192,7 +193,7 @@ def list_leads(db: Session = Depends(get_session), user=Depends(get_current_user
     rows = db.execute(select(Lead).order_by(Lead.stage)).scalars().all()
     return [{"id": l.id, "name": l.name, "owner": l.owner, "stage": l.stage,
              "amount": l.amount, "project_id": l.project_id, "client_id": l.client_id,
-             "address": l.address}
+             "address": l.address, "whatsapp_number": l.whatsapp_number}
             for l in rows]
 
 

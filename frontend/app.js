@@ -148,6 +148,7 @@ function onLeadSelected() {
   $("qCustomer").value = client.name;
   $("qEmail").value = client.email || "";
   $("qAddress").value = lead.address || "";
+  $("qMobile").value = lead.whatsapp_number || client.mobile || "";
   info.textContent = "Project: " + project.name + " · Client: " + client.name +
     (client.city ? " · " + client.city : "") + " · GSTIN: " + (client.gstin || "—") +
     " · Phone: " + (client.phone || "—");
@@ -343,6 +344,7 @@ async function saveQuote() {
       customer_name: $("qCustomer").value.trim(),
       customer_email: $("qEmail").value.trim() || null,
       customer_address: $("qAddress").value.trim() || null,
+      customer_mobile: $("qMobile").value.trim() || null,
       client_id: selectedClientId,
       currency: cur(),
       terms_template_id: parseInt($("qTerms").value, 10) || null,
@@ -372,7 +374,9 @@ function renderPreview() {
   const term = TERMS.find((t) => t.id === termId) || TERMS[0];
   $("pvTerms").innerHTML = "<b>Terms &amp; Conditions</b>\n" + (term ? term.body : "") + "\n\n<b>Evavo Wellness &amp; Solutions LLP</b>";
   const addr = $("qAddress").value.trim();
+  const mobile = $("qMobile").value.trim();
   $("pvBillTo").innerHTML = "<br>" + esc($("qCustomer").value) + "<br>" + esc($("qEmail").value || "") +
+    (mobile ? "<br>" + esc(mobile) : "") +
     (addr ? "<br>" + esc(addr).replace(/\n/g, "<br>") : "");
   $("pvCur").textContent = cur() + " (" + SYM[cur()] + ")";
 
@@ -434,6 +438,14 @@ async function emailCurrent() {
     toast(r.dry_run ? "Dry run — configure Email Setup to actually send (to " + r.to + ")" : "Emailed to " + r.to);
   } catch (e) { toast("Email failed: " + e.message, true); }
 }
+async function whatsappCurrent() {
+  if (!requireSaved()) return;
+  try {
+    const r = await API.sendWhatsapp(currentQuoteId);
+    window.open(r.url, "_blank");
+    toast("WhatsApp opened for " + r.phone);
+  } catch (e) { toast("WhatsApp failed: " + e.message, true); }
+}
 async function openQuote(id) {
   try {
     const q = await API.getQuote(id);
@@ -443,6 +455,7 @@ async function openQuote(id) {
     $("qCustomer").value = q.customer_name || "";
     $("qEmail").value = q.customer_email || "";
     $("qAddress").value = q.customer_address || "";
+    $("qMobile").value = q.customer_mobile || "";
     $("qLead").value = ""; $("qLeadInfo").textContent = ""; selectedClientId = null;
     if (q.terms_template_id != null) $("qTerms").value = q.terms_template_id;
     if (q.currency && $("curSel").querySelector('option[value="' + q.currency + '"]')) $("curSel").value = q.currency;
@@ -485,26 +498,27 @@ async function renderClientsMaster() {
       '<div class="field"><label>Name</label><input id="ncName"></div>' +
       '<div class="field"><label>Email</label><input id="ncEmail"></div>' +
       '<div class="field"><label>Phone</label><input id="ncPhone"></div>' +
+      '<div class="field"><label>Mobile (WhatsApp)</label><input id="ncMobile"></div>' +
       '<div class="field"><label>City</label><input id="ncCity"></div></div>' +
       '<button class="btn primary sm" onclick="saveClient()">' + (editing ? "💾 Update Client" : "＋ Add Client") + "</button>" +
       (editing ? ' <button class="btn ghost sm" onclick="cancelClientEdit()">Cancel</button>' : "") + "</div>" +
       '<div class="card pad"><div class="section-title">Clients (' + rows.length + ')</div>' +
-      '<table class="tbl"><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>City</th><th></th>' +
+      '<table class="tbl"><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Mobile</th><th>City</th><th></th>' +
       (canSeeCost ? "<th></th>" : "") + "</tr></thead><tbody>" +
-      (rows.length ? rows.map((r) => "<tr><td>" + esc(r.name) + "</td><td>" + esc(r.email) + "</td><td>" + esc(r.phone) + "</td><td>" + esc(r.city) +
+      (rows.length ? rows.map((r) => "<tr><td>" + esc(r.name) + "</td><td>" + esc(r.email) + "</td><td>" + esc(r.phone) + "</td><td>" + esc(r.mobile) + "</td><td>" + esc(r.city) +
         '</td><td><button class="btn ghost sm" onclick="editClient(' + r.id + ')">Edit</button></td>' +
         (canSeeCost ? '<td><button class="del" onclick="delClient(' + r.id + ')">✕</button></td>' : "") + "</tr>").join("")
-        : '<tr><td colspan="6"><div class="empty">No clients yet.</div></td></tr>') + "</tbody></table></div>";
+        : '<tr><td colspan="7"><div class="empty">No clients yet.</div></td></tr>') + "</tbody></table></div>";
     if (editing) {
       const r = rows.find((x) => x.id === editingClientId);
-      if (r) { $("ncName").value = r.name || ""; $("ncEmail").value = r.email || ""; $("ncPhone").value = r.phone || ""; $("ncCity").value = r.city || ""; }
+      if (r) { $("ncName").value = r.name || ""; $("ncEmail").value = r.email || ""; $("ncPhone").value = r.phone || ""; $("ncMobile").value = r.mobile || ""; $("ncCity").value = r.city || ""; }
     }
   } catch (e) { c.innerHTML = '<div class="empty">' + e.message + "</div>"; }
 }
 async function saveClient() {
   const name = $("ncName").value.trim();
   if (!name) { toast("Client name is required.", true); return; }
-  const data = { name, email: $("ncEmail").value.trim() || null, phone: $("ncPhone").value.trim() || null, city: $("ncCity").value.trim() || null };
+  const data = { name, email: $("ncEmail").value.trim() || null, phone: $("ncPhone").value.trim() || null, mobile: $("ncMobile").value.trim() || null, city: $("ncCity").value.trim() || null };
   try {
     if (editingClientId != null) { await API.updateClient(editingClientId, data); toast("Client updated."); editingClientId = null; }
     else { await API.createClient(data); toast("Client added."); }
@@ -598,7 +612,8 @@ async function renderLeadsMaster() {
       '<div class="field"><label>Owner</label><input id="nlOwner"></div>' +
       '<div class="field"><label>Stage</label><select id="nlStage"><option value="0">Leads</option><option value="1">Quoted</option><option value="2">Negotiation</option><option value="3">Won</option></select></div>' +
       '<div class="field"><label>Amount (₹)</label><input id="nlAmount" type="number" value="0"></div>' +
-      '<div class="field" style="grid-column:1/-1"><label>Address (site/installation — may differ from the client\'s registered address)</label><textarea id="nlAddress" rows="2"></textarea></div></div>' +
+      '<div class="field" style="grid-column:1/-1"><label>Address (site/installation — may differ from the client\'s registered address)</label><textarea id="nlAddress" rows="2"></textarea></div>' +
+      '<div class="field" style="grid-column:1/-1"><label>WhatsApp number (site contact — may differ from the client\'s registered mobile)</label><input id="nlWhatsapp"></div></div>' +
       '<button class="btn primary sm" onclick="saveLead()">' + (editing ? "💾 Update Lead" : "＋ Add Lead") + "</button>" +
       (editing ? ' <button class="btn ghost sm" onclick="cancelLeadEdit()">Cancel</button>' : "") + "</div>" +
       '<div class="card pad"><div class="section-title">Leads (' + rows.length + ')</div>' +
@@ -616,6 +631,7 @@ async function renderLeadsMaster() {
         $("nlName").value = r.name || ""; $("nlOwner").value = r.owner || "";
         $("nlStage").value = r.stage; $("nlAmount").value = r.amount || 0;
         $("nlAddress").value = r.address || "";
+        $("nlWhatsapp").value = r.whatsapp_number || "";
       }
     }
     updateLeadClientLabel();
@@ -626,7 +642,7 @@ async function saveLead() {
   const projectId = parseInt($("nlProject").value, 10);
   if (!name) { toast("Lead name is required.", true); return; }
   if (!projectId) { toast("Select a project.", true); return; }
-  const data = { name, owner: $("nlOwner").value.trim() || null, stage: parseInt($("nlStage").value, 10), amount: parseFloat($("nlAmount").value) || 0, project_id: projectId, address: $("nlAddress").value.trim() || null };
+  const data = { name, owner: $("nlOwner").value.trim() || null, stage: parseInt($("nlStage").value, 10), amount: parseFloat($("nlAmount").value) || 0, project_id: projectId, address: $("nlAddress").value.trim() || null, whatsapp_number: $("nlWhatsapp").value.trim() || null };
   try {
     if (editingLeadId != null) { await API.updateLead(editingLeadId, data); toast("Lead updated."); editingLeadId = null; }
     else { await API.createLead(data); toast("Lead added."); }

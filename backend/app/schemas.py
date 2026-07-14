@@ -65,6 +65,7 @@ class QuoteCreate(BaseModel):
     customer_name: str
     customer_email: Optional[str] = None
     customer_address: Optional[str] = None
+    customer_mobile: Optional[str] = None
     client_id: Optional[int] = None
     currency: str = "INR"
     terms_template_id: Optional[int] = None
@@ -84,6 +85,7 @@ class ClientIn(BaseModel):
     name: str
     email: Optional[str] = None
     phone: Optional[str] = None
+    mobile: Optional[str] = None
     city: Optional[str] = None
     address: Optional[str] = None
     gstin: Optional[str] = None
@@ -102,6 +104,7 @@ class LeadIn(BaseModel):
     amount: float = 0.0
     project_id: int
     address: Optional[str] = None
+    whatsapp_number: Optional[str] = None
 
 
 class TermsIn(BaseModel):

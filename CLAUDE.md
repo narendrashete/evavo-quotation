@@ -24,7 +24,7 @@ backend/app/
   seed.py      default users, FX rates, demo data
 backend/manage.py     CLI: init-db, seed, import-excel, parity, all
 backend/dev_server.py single-port SQLite dev mode
-backend/tests/        conftest.py, test_pricing.py, test_parity.py, test_api_roles.py
+backend/tests/        conftest.py, test_pricing.py, test_parity.py, test_api_roles.py, test_fx_refresh.py
 frontend/             index.html, app.js, api.js, styles.css
 deploy/               DEPLOY-WINDOWS.md, DEPLOY-DIGITALOCEAN.md, create-sql-login.sql, setup.ps1
 ```
@@ -40,11 +40,17 @@ deploy/               DEPLOY-WINDOWS.md, DEPLOY-DIGITALOCEAN.md, create-sql-logi
 
 When adding new fields to products/quotes that touch cost or margin, update `serialize.py`'s field allowlist — don't rely on the frontend to hide them.
 
-**Quote lines snapshot price/cost at creation time** so historical quotes don't reprice when FX rates or product pricing change later.
+**Quote lines snapshot price/cost at creation time** so historical quotes don't reprice when FX rates or product pricing change later. Quotes also snapshot `customer_name/email/address/mobile` from the Client/Lead at save time, plus a `share_token` — never re-derive customer contact info from the live Client row for an existing quote.
+
+**No Alembic** — schema sync is `Base.metadata.create_all()` (`db.py: create_all()`), which only creates *missing tables*, not missing columns on already-deployed tables. Since production has live data, any new column added to `models.py` must also get an entry in `db.py`'s `_add_missing_columns()` (idempotent `ALTER TABLE ADD COLUMN`, Postgres uses `IF NOT EXISTS`) — otherwise it silently never appears in production even though `manage.py init-db` runs on every deploy.
+
+**WhatsApp/Email send** (`routers/quotes.py`): "Send by WhatsApp" is a free `wa.me` click-to-chat link built server-side (`POST /quotes/{id}/whatsapp`, no paid API) and opened client-side via `window.open()`. Email reuses the existing DB-driven Email Setup (Masters > Email Setup — Gmail SMTP + App Password works as-is, no `.env` SMTP config). Both share one message-builder (`_quote_message`) and a public, unauthenticated, token-based PDF link (`GET /quotes/share/{token}/pdf`, looked up by `Quote.share_token` — never by id) so a customer can view/download without logging in; that PDF is always built from `client_preview_out`, so cost/margin are structurally excluded, same guarantee as the authed `/pdf` route.
 
 ## Database Entities
 
 `users`, `fx_rates`, `categories`, `products`, `clients`, `projects`, `leads`, `terms_templates`, `email_setup`, `quotes`, `quote_lines`, `cities`
+
+Contact fields: `clients.phone` (landline/office) + `clients.mobile` (WhatsApp default) · `leads.whatsapp_number` (per-lead override, same pattern as `leads.address`) · `quotes.customer_mobile` + `quotes.share_token` (snapshotted per quote).
 
 ## Running Locally
 

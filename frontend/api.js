@@ -51,6 +51,7 @@ const API = (() => {
     setQuoteStatus: (id, status) =>
       request("PATCH", "/api/quotes/" + id + "/status", { status }),
     emailQuote: (id) => request("POST", "/api/quotes/" + id + "/email"),
+    sendWhatsapp: (id) => request("POST", "/api/quotes/" + id + "/whatsapp"),
     reviseQuote: (id) => request("POST", "/api/quotes/" + id + "/revise"),
     async pdfBlob(id) {
       const res = await fetch("/api/quotes/" + id + "/pdf",

@@ -103,6 +103,7 @@
                 </div>
                 <div class="field"><label>Customer</label><input id="qCustomer" value="Ghareni Spa &amp; Salon Pvt Ltd"></div>
                 <div class="field"><label>Client Email</label><input id="qEmail" value="purchase@gharenispa.in"></div>
+                <div class="field"><label>WhatsApp Number</label><input id="qMobile" placeholder="Defaults from the Lead/Client — edit if needed"></div>
                 <div class="field" style="grid-column:1/-1"><label>Customer Address</label><textarea id="qAddress" rows="2"></textarea></div>
                 <div class="field"><label>Currency</label><select id="curSel" onchange="recalc()"></select></div>
                 <div class="field"><label>Terms Template</label><select id="qTerms"></select></div>
@@ -142,7 +143,7 @@
 
       <!-- Client Preview -->
       <section class="view" id="preview">
-        <div class="page-head"><div><h1>Client Preview</h1><p>Exactly what the client receives — selling prices only.</p></div><div style="display:flex;gap:9px;flex-wrap:wrap"><button class="btn ghost" onclick="goto('builder')">← Edit</button><button class="btn ghost" id="reviseBtn" onclick="reviseCurrent()">🔁 Revise</button><button class="btn primary" id="pdfBtn" onclick="downloadPdf()">⬇ Download PDF</button><button class="btn teal" id="emailBtn" onclick="emailCurrent()">✉ Email to client</button></div></div>
+        <div class="page-head"><div><h1>Client Preview</h1><p>Exactly what the client receives — selling prices only.</p></div><div style="display:flex;gap:9px;flex-wrap:wrap"><button class="btn ghost" onclick="goto('builder')">← Edit</button><button class="btn ghost" id="reviseBtn" onclick="reviseCurrent()">🔁 Revise</button><button class="btn primary" id="pdfBtn" onclick="downloadPdf()">⬇ Download PDF</button><button class="btn teal" id="emailBtn" onclick="emailCurrent()">✉ Email to client</button><button class="btn whatsapp" id="waBtn" onclick="whatsappCurrent()">📱 Send by WhatsApp</button></div></div>
         <div class="safe-note">🔒 Client-safe view — internal cost, margin and FX build-up are never included in this document.</div>
         <div class="paper">
           <div class="ph"><div><div class="l">EV</div><h2>Evavo Wellness &amp; Solutions LLP</h2><div style="font-size:11.5px;color:#aecbe6;margin-top:4px">Spa Consulting · Spa &amp; Salon Equipment</div></div><div class="qmeta"><b style="color:#fff;font-size:14px">QUOTATION</b><br>No: <span id="pvNo">—</span><br>Date: <span id="pvDate">—</span><br>Valid: 2 weeks</div></div>
@@ -213,7 +214,7 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="api.js?v=7"></script>
-<script src="app.js?v=7"></script>
+<script src="api.js?v=8"></script>
+<script src="app.js?v=8"></script>
 </body>
 </html>
