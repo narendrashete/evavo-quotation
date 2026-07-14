@@ -76,11 +76,25 @@ def test_sales_quote_view_hides_cost(client, sales_headers):
     assert not _has_confidential(r.json())
 
 
-def test_high_discount_triggers_approval_and_blocks_send(client, sales_headers):
+def test_sales_blocked_by_discount_cap(client, sales_headers):
+    # 20% line discount exceeds the 12% hard cap -> sales cannot even create it.
+    r = client.post("/api/quotes", json=_new_quote_payload(line_disc=20.0),
+                    headers=sales_headers)
+    assert r.status_code == 422
+    assert "maximum" in r.json()["detail"].lower()
+
+
+def test_manager_exceeds_cap_and_flags_approval(client, manager_headers):
+    # Manager may exceed the cap; the quote still flags for approval.
     created = client.post("/api/quotes", json=_new_quote_payload(line_disc=20.0),
-                          headers=sales_headers).json()
+                          headers=manager_headers).json()
     assert created["totals"]["needs_approval"] is True
-    # sales cannot push it to "sent" while approval is pending
+
+
+def test_sales_cannot_send_pending_approval_quote(client, manager_headers, sales_headers):
+    # A manager-created high-discount quote needs approval; sales cannot send it.
+    created = client.post("/api/quotes", json=_new_quote_payload(line_disc=20.0),
+                          headers=manager_headers).json()
     r = client.patch(f"/api/quotes/{created['id']}/status",
                      json={"status": "sent"}, headers=sales_headers)
     assert r.status_code == 403

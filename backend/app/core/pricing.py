@@ -100,23 +100,27 @@ class LineResult:
     unit_price: float           # client unit selling price (INR)
     line_gross: float           # unit_price * qty
     line_net: float             # after line discount (INR)
+    gst_pct: float              # GST rate applied to this line (client-safe)
+    gst_amount: float           # line_net * gst_pct/100 (INR, client-safe)
     line_cost: float            # final_c2e * qty (INR) — CONFIDENTIAL
     line_margin: float          # line_net - line_cost — CONFIDENTIAL
     margin_pct: float           # CONFIDENTIAL
 
 
 def compute_line(unit_price: float, final_c2e: float, qty: float,
-                 line_disc: float = 0.0) -> LineResult:
+                 line_disc: float = 0.0, gst_pct: float = 0.0) -> LineResult:
     """Line economics. Mirrors the prototype recalc() per-row math."""
     line_gross = unit_price * qty
     line_net = line_gross * (1.0 - line_disc / 100.0)
+    gst_amount = line_net * gst_pct / 100.0
     line_cost = final_c2e * qty
     line_margin = line_net - line_cost
     margin_pct = (line_margin / line_net * 100.0) if line_net > 0 else 0.0
     return LineResult(
         qty=qty, line_disc=line_disc, unit_price=unit_price,
-        line_gross=line_gross, line_net=line_net, line_cost=line_cost,
-        line_margin=line_margin, margin_pct=margin_pct,
+        line_gross=line_gross, line_net=line_net,
+        gst_pct=gst_pct, gst_amount=gst_amount,
+        line_cost=line_cost, line_margin=line_margin, margin_pct=margin_pct,
     )
 
 
@@ -126,14 +130,28 @@ class QuoteLineInput:
     final_c2e: float        # unit cost (INR) — CONFIDENTIAL
     qty: float = 1.0
     line_disc: float = 0.0  # percent
+    gst_pct: float = 0.0    # GST rate for this line's goods
 
 
 @dataclass(frozen=True)
 class AddOns:
     install_enabled: bool = True
     install_pct: float = DEFAULT_INSTALL_PCT
-    packaging: float = 0.0     # flat INR
-    freight: float = 0.0       # flat INR
+    packaging: float = 0.0        # flat INR
+    # Freight/import breakdown (all flat INR). `freight` (kept for back-compat)
+    # is the local+intl+import sum, exposed on QuoteTotals for old readers.
+    local_freight: float = 0.0
+    intl_freight: float = 0.0
+    import_charge: float = 0.0
+    # When set, overrides `subtotal_net * install_pct` — supports an editable
+    # flat installation *charge* rather than a percentage.
+    install_amount: Optional[float] = None
+    # GST rate applied to installation + freight + import (which carry no per-line
+    # HSN of their own). Also the default used when a line has no rate.
+    gst_default_pct: float = 0.0
+    # Place-of-supply routing: intra-state (== home_state) -> CGST+SGST, else IGST.
+    home_state: str = ""
+    place_of_supply: str = ""
 
 
 @dataclass(frozen=True)
@@ -142,8 +160,18 @@ class QuoteTotals:
     discount_given: float      # gross - net (INR)
     installation: float        # INR
     packaging: float
-    freight: float
-    grand_total: float         # INR
+    freight: float             # local + intl + import (back-compat sum)
+    local_freight: float
+    intl_freight: float
+    import_charge: float
+    grand_total: float         # pre-tax total (subtotal + install + pack + freight)
+    taxable_amount: float      # base GST is charged on (goods + install + freight)
+    gst_total: float           # total GST (INR)
+    cgst: float                # intra-state half
+    sgst: float                # intra-state half
+    igst: float                # inter-state full
+    is_intra_state: bool
+    final_payable: float       # taxable_amount + gst_total
     overall_disc_pct: float
     needs_approval: bool
     # Confidential block:
@@ -155,30 +183,54 @@ class QuoteTotals:
 def compute_quote(lines: list[QuoteLineInput], addons: Optional[AddOns] = None,
                   overall_threshold: float = APPROVAL_OVERALL_DISC_PCT,
                   line_threshold: float = APPROVAL_LINE_DISC_PCT) -> tuple[list[LineResult], QuoteTotals]:
-    """Whole-quote roll-up incl. add-ons and the approval guardrail.
+    """Whole-quote roll-up incl. add-ons, GST and the approval guardrail.
 
     Returns (per-line results, totals). The CONFIDENTIAL fields on the results
-    must be stripped before any sales-role or client-facing serialization.
+    must be stripped before any sales-role or client-facing serialization. GST
+    is layered on top of the pre-tax `grand_total`; `final_payable` carries the
+    tax-inclusive figure.
     """
     addons = addons or AddOns()
     results: list[LineResult] = []
     subtotal_net = 0.0
     gross = 0.0
     total_cost = 0.0
+    goods_gst = 0.0
     any_line_over = False
 
     for ln in lines:
-        r = compute_line(ln.unit_price, ln.final_c2e, ln.qty, ln.line_disc)
+        r = compute_line(ln.unit_price, ln.final_c2e, ln.qty, ln.line_disc, ln.gst_pct)
         results.append(r)
         subtotal_net += r.line_net
         gross += r.line_gross
         total_cost += r.line_cost
+        goods_gst += r.gst_amount
         if ln.line_disc > line_threshold:
             any_line_over = True
 
     discount_given = gross - subtotal_net
-    installation = subtotal_net * addons.install_pct if addons.install_enabled else 0.0
-    grand_total = subtotal_net + installation + addons.packaging + addons.freight
+    if addons.install_amount is not None:
+        installation = addons.install_amount
+    else:
+        installation = subtotal_net * addons.install_pct if addons.install_enabled else 0.0
+    freight = addons.local_freight + addons.intl_freight + addons.import_charge
+    grand_total = subtotal_net + installation + addons.packaging + freight
+
+    # GST: per-line rate on goods; the default rate on install + freight + import
+    # (packaging is treated as part of the freight/handling base for GST too).
+    addon_taxable = installation + addons.packaging + freight
+    taxable_amount = subtotal_net + addon_taxable
+    gst_total = goods_gst + addon_taxable * addons.gst_default_pct / 100.0
+
+    is_intra_state = bool(addons.home_state) and addons.place_of_supply == addons.home_state
+    if is_intra_state:
+        cgst = sgst = gst_total / 2.0
+        igst = 0.0
+    else:
+        cgst = sgst = 0.0
+        igst = gst_total
+    final_payable = taxable_amount + gst_total
+
     overall_disc_pct = (discount_given / gross * 100.0) if gross > 0 else 0.0
     needs_approval = overall_disc_pct > overall_threshold or any_line_over
     total_margin = subtotal_net - total_cost
@@ -189,8 +241,18 @@ def compute_quote(lines: list[QuoteLineInput], addons: Optional[AddOns] = None,
         discount_given=discount_given,
         installation=installation,
         packaging=addons.packaging,
-        freight=addons.freight,
+        freight=freight,
+        local_freight=addons.local_freight,
+        intl_freight=addons.intl_freight,
+        import_charge=addons.import_charge,
         grand_total=grand_total,
+        taxable_amount=taxable_amount,
+        gst_total=gst_total,
+        cgst=cgst,
+        sgst=sgst,
+        igst=igst,
+        is_intra_state=is_intra_state,
+        final_payable=final_payable,
         overall_disc_pct=overall_disc_pct,
         needs_approval=needs_approval,
         total_cost=total_cost,

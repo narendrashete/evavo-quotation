@@ -75,6 +75,8 @@ const API = (() => {
     updateTerms: (id, d) => request("PUT", "/api/masters/terms/" + id, d),
     getEmailSetup: () => request("GET", "/api/masters/email-setup"),
     saveEmailSetup: (d) => request("PUT", "/api/masters/email-setup", d),
+    getSettings: () => request("GET", "/api/masters/settings"),
+    saveSettings: (d) => request("PUT", "/api/masters/settings", d),
     updateProduct: (id, d) => request("PUT", "/api/masters/products/" + id, d),
     // users (admin-only)
     users: () => request("GET", "/api/users"),

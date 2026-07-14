@@ -63,6 +63,9 @@ class Product(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     product_link: Mapped[str | None] = mapped_column(String(500), nullable=True)
     image: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # GST classification (client-safe). gst_pct falls back to AppSettings default.
+    hsn_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    gst_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # CONFIDENTIAL pricing parameters (drive the engine)
     source_currency: Mapped[str] = mapped_column(String(3), default="INR")
@@ -148,6 +151,19 @@ class EmailSetup(Base):
     use_tls: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class AppSettings(Base):
+    """Single-row, admin-editable configuration defaults for the Quote Builder."""
+    __tablename__ = "app_settings"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    max_discount_pct: Mapped[float] = mapped_column(Float, default=12.0)   # hard cap (admin-only)
+    gst_default_pct: Mapped[float] = mapped_column(Float, default=18.0)
+    install_pct: Mapped[float] = mapped_column(Float, default=0.105)
+    local_freight: Mapped[float] = mapped_column(Float, default=0.0)
+    intl_freight: Mapped[float] = mapped_column(Float, default=0.0)
+    import_charge: Mapped[float] = mapped_column(Float, default=0.0)
+    home_state: Mapped[str] = mapped_column(String(4), default="27")       # Maharashtra
+
+
 # --- Quotes ------------------------------------------------------------------
 
 class Quote(Base):
@@ -169,12 +185,27 @@ class Quote(Base):
 
     install_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     install_pct: Mapped[float] = mapped_column(Float, default=0.105)
+    install_amount: Mapped[float | None] = mapped_column(Float, nullable=True)  # editable flat charge
     packaging: Mapped[float] = mapped_column(Float, default=0.0)
-    freight: Mapped[float] = mapped_column(Float, default=0.0)
+    freight: Mapped[float] = mapped_column(Float, default=0.0)          # local+intl+import sum (back-compat)
+    local_freight: Mapped[float] = mapped_column(Float, default=0.0)
+    intl_freight: Mapped[float] = mapped_column(Float, default=0.0)
+    import_charge: Mapped[float] = mapped_column(Float, default=0.0)
+
+    # GST / place-of-supply (snapshotted at save time)
+    place_of_supply: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    home_state: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    gst_default_pct: Mapped[float] = mapped_column(Float, default=0.0)
 
     # Snapshotted totals (INR)
     subtotal_net: Mapped[float] = mapped_column(Float, default=0.0)
-    grand_total: Mapped[float] = mapped_column(Float, default=0.0)
+    grand_total: Mapped[float] = mapped_column(Float, default=0.0)      # pre-tax total
+    taxable_amount: Mapped[float] = mapped_column(Float, default=0.0)
+    gst_total: Mapped[float] = mapped_column(Float, default=0.0)
+    cgst: Mapped[float] = mapped_column(Float, default=0.0)
+    sgst: Mapped[float] = mapped_column(Float, default=0.0)
+    igst: Mapped[float] = mapped_column(Float, default=0.0)
+    final_payable: Mapped[float] = mapped_column(Float, default=0.0)    # taxable + gst
     total_cost: Mapped[float] = mapped_column(Float, default=0.0)       # CONFIDENTIAL
     needs_approval: Mapped[bool] = mapped_column(Boolean, default=False)
 
@@ -194,6 +225,11 @@ class QuoteLine(Base):
     model_no: Mapped[str | None] = mapped_column(String(120), nullable=True)
     qty: Mapped[float] = mapped_column(Float, default=1.0)
     line_disc: Mapped[float] = mapped_column(Float, default=0.0)  # percent
+
+    # GST snapshot (client-safe)
+    hsn_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    gst_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    gst_amount: Mapped[float] = mapped_column(Float, default=0.0)
 
     # SNAPSHOT at add-time (INR)
     unit_price: Mapped[float] = mapped_column(Float)                 # client selling

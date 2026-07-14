@@ -12,11 +12,56 @@ from sqlalchemy.orm import Session
 
 from app.db import get_session
 from app.core.security import get_current_user, require_role
-from app.models import Client, Project, Lead, TermsTemplate, EmailSetup, Product
-from app.schemas import ClientIn, ProjectIn, LeadIn, TermsIn, EmailSetupIn, ProductUpdate
+from app.models import Client, Project, Lead, TermsTemplate, EmailSetup, Product, AppSettings
+from app.schemas import (
+    ClientIn, ProjectIn, LeadIn, TermsIn, EmailSetupIn, ProductUpdate, AppSettingsIn,
+)
 from app.core.serialize import product_out
 
 router = APIRouter(prefix="/api/masters", tags=["masters"])
+
+# Product columns that drive the pricing build-up. Editing any of them
+# invalidates the migrated override snapshot; editing only HSN/GST/name/etc.
+# must NOT (that would silently reprice parity-migrated override rows).
+_PRICING_FIELDS = {"source_price_inr", "loading_factor", "client_markup",
+                   "list_uplift", "markup_base"}
+
+
+def _settings_dict(s: AppSettings) -> dict:
+    return {"id": s.id, "max_discount_pct": s.max_discount_pct,
+            "gst_default_pct": s.gst_default_pct, "install_pct": s.install_pct,
+            "local_freight": s.local_freight, "intl_freight": s.intl_freight,
+            "import_charge": s.import_charge, "home_state": s.home_state}
+
+
+# --- App settings (single row; read: any authenticated user, write: admin only) ---
+# The builder needs the GST/freight/discount defaults for whoever is quoting,
+# including sales; only the write path is admin-gated.
+@router.get("/settings")
+def get_settings(db: Session = Depends(get_session),
+                 user=Depends(get_current_user)):
+    s = db.execute(select(AppSettings)).scalars().first()
+    if not s:
+        s = AppSettings()
+        db.add(s)
+        db.commit()
+        db.refresh(s)
+    return _settings_dict(s)
+
+
+@router.put("/settings")
+def save_settings(body: AppSettingsIn, db: Session = Depends(get_session),
+                  user=Depends(require_role("admin"))):
+    s = db.execute(select(AppSettings)).scalars().first()
+    if s:
+        for k, v in body.model_dump().items():
+            setattr(s, k, v)
+    else:
+        s = AppSettings(**body.model_dump())
+        db.add(s)
+    db.commit()
+    db.refresh(s)
+    return _settings_dict(s)
 
 
 # --- Terms templates ---
@@ -81,12 +126,15 @@ def update_product(product_id: int, body: ProductUpdate, db: Session = Depends(g
     p = db.get(Product, product_id)
     if not p:
         raise HTTPException(404, "Product not found")
-    for k, v in body.model_dump(exclude_none=True).items():
+    changes = body.model_dump(exclude_none=True)
+    for k, v in changes.items():
         setattr(p, k, v)
-    # Editing pricing params makes the migrated override snapshot stale.
-    p.is_manual_override = False
-    p.migrated_client_unit = None
-    p.migrated_final_c2e = None
+    # Editing pricing params makes the migrated override snapshot stale — but
+    # editing only HSN/GST/name/etc. must not reprice a parity-migrated row.
+    if _PRICING_FIELDS & changes.keys():
+        p.is_manual_override = False
+        p.migrated_client_unit = None
+        p.migrated_final_c2e = None
     db.commit()
     return product_out(p, include_cost=True)
 

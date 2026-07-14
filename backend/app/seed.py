@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
-from app.models import User, FxRate, TermsTemplate, Client, Project, Lead
+from app.models import User, FxRate, TermsTemplate, Client, Project, Lead, AppSettings
 
 DEFAULT_USERS = [
     ("Alan Sales", "sales@evavo.test", "sales123", "sales"),
@@ -90,4 +90,7 @@ def seed(db: Session) -> None:
                   "3. Payment: 100% advance.\n"
                   "4. Installation 10.5% of equipment value.\n"
                   "5. Lead time: 8-12 weeks.")))
+
+    if not db.execute(select(AppSettings)).first():
+        db.add(AppSettings())  # all defaults (12% cap, 18% GST, 10.5% install, home state 27)
     db.commit()

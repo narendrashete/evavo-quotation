@@ -15,6 +15,23 @@ let currentQuoteId = null;
 let lastPreview = null;     // server client-preview payload after save
 let BUILDER_LEADS = [], BUILDER_PROJECTS = [], BUILDER_CLIENTS = [];
 let selectedClientId = null;  // resolved from the picked Lead, sent with the quote
+let SETTINGS = { max_discount_pct: 12, gst_default_pct: 18, install_pct: 0.105,
+                 local_freight: 0, intl_freight: 0, import_charge: 0, home_state: "27" };
+
+// GST place-of-supply state codes (India), per the client's spec.
+const STATE_CODES = [
+  ["01", "Jammu & Kashmir"], ["02", "Himachal Pradesh"], ["03", "Punjab"],
+  ["04", "Chandigarh"], ["05", "Uttarakhand"], ["06", "Haryana"], ["07", "Delhi"],
+  ["08", "Rajasthan"], ["09", "Uttar Pradesh"], ["10", "Bihar"], ["11", "Sikkim"],
+  ["12", "Arunachal Pradesh"], ["13", "Nagaland"], ["14", "Manipur"], ["15", "Mizoram"],
+  ["16", "Tripura"], ["17", "Meghalaya"], ["18", "Assam"], ["19", "West Bengal"],
+  ["20", "Jharkhand"], ["21", "Odisha"], ["22", "Chhattisgarh"], ["23", "Madhya Pradesh"],
+  ["24", "Gujarat"], ["26", "Dadra & Nagar Haveli and Daman & Diu"], ["27", "Maharashtra"],
+  ["28", "Andhra Pradesh"], ["29", "Karnataka"], ["30", "Goa"], ["31", "Lakshadweep"],
+  ["32", "Kerala"], ["33", "Tamil Nadu"], ["34", "Puducherry"],
+  ["35", "Andaman & Nicobar Islands"], ["36", "Telangana"], ["37", "Andhra Pradesh (New)"],
+  ["38", "Ladakh"], ["97", "Other Territory"], ["99", "Centre Jurisdiction"],
+];
 
 const CATCOLOR = {
   "Salon Equipment": ["#1a9fe0", "#0d6efd"], "Massage Beds": ["#13b3a6", "#0f9488"],
@@ -90,14 +107,39 @@ async function boot() {
   $("userAvatar").textContent = currentUser.name.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
   applyRoleVisibility();
 
-  await Promise.all([loadFx(), loadTerms(), loadProducts(), loadBuilderLeads()]);
+  await Promise.all([loadFx(), loadTerms(), loadProducts(), loadBuilderLeads(), loadSettings()]);
   buildCurrencyOptions();
   buildCategoryOptions();
+  buildPosOptions();
+  applyBuilderDefaults();
   renderProducts();
   renderItems();
   recalc();
   updateCart();
   await loadDashboard();
+}
+
+// Settings drive the Quote Builder defaults (max discount, GST%, install%, freight).
+// Managers/admins can read them; anyone else falls back to the hardcoded defaults.
+async function loadSettings() {
+  try { SETTINGS = await API.getSettings(); } catch (e) { /* sales role: keep defaults */ }
+}
+function buildPosOptions() {
+  const sel = $("qPos"); if (!sel) return;
+  sel.innerHTML = '<option value="">— select state —</option>';
+  STATE_CODES.forEach(([code, name]) => {
+    const o = document.createElement("option");
+    o.value = code; o.textContent = code + " · " + name; sel.appendChild(o);
+  });
+  sel.value = SETTINGS.home_state || "27";
+}
+// Pre-fill the editable add-on/GST fields from the configured defaults.
+function applyBuilderDefaults() {
+  if ($("aInstallPct")) $("aInstallPct").value = (SETTINGS.install_pct * 100).toFixed(1).replace(/\.0$/, "");
+  if ($("qGst")) $("qGst").value = SETTINGS.gst_default_pct;
+  if ($("aLocalFreight")) $("aLocalFreight").value = SETTINGS.local_freight || 0;
+  if ($("aIntlFreight")) $("aIntlFreight").value = SETTINGS.intl_freight || 0;
+  if ($("aImport")) $("aImport").value = SETTINGS.import_charge || 0;
 }
 
 function applyRoleVisibility() {
@@ -149,6 +191,12 @@ function onLeadSelected() {
   $("qEmail").value = client.email || "";
   $("qAddress").value = lead.address || "";
   $("qMobile").value = lead.whatsapp_number || client.mobile || "";
+  // Default place of supply from the client's GSTIN state prefix (first 2 digits).
+  const posFromGstin = (client.gstin || "").trim().slice(0, 2);
+  if (posFromGstin && STATE_CODES.some(([c]) => c === posFromGstin)) {
+    $("qPos").value = posFromGstin;
+  }
+  recalc();
   info.textContent = "Project: " + project.name + " · Client: " + client.name +
     (client.city ? " · " + client.city : "") + " · GSTIN: " + (client.gstin || "—") +
     " · Phone: " + (client.phone || "—");
@@ -174,7 +222,8 @@ const titles = {
   dashboard: "Dashboard", pipeline: "Sales Pipeline", products: "Product Catalog",
   builder: "Quote Builder", preview: "Client Preview",
   clientsMaster: "Clients", projectsMaster: "Projects", leadsMaster: "Leads",
-  termsMaster: "Terms", emailMaster: "Email Setup", usersMaster: "Users",
+  termsMaster: "Terms", emailMaster: "Email Setup", settingsMaster: "Settings",
+  usersMaster: "Users",
 };
 function goto(v) {
   document.querySelectorAll(".view").forEach((s) => s.classList.toggle("active", s.id === v));
@@ -187,6 +236,7 @@ function goto(v) {
   if (v === "leadsMaster") renderLeadsMaster();
   if (v === "termsMaster") renderTermsMaster();
   if (v === "emailMaster") renderEmailMaster();
+  if (v === "settingsMaster") renderSettingsMaster();
   if (v === "usersMaster") renderUsersMaster();
   window.scrollTo(0, 0);
 }
@@ -197,6 +247,9 @@ function newQuote() {
   LINES = []; currentQuoteId = null; lastPreview = null; selectedClientId = null;
   $("builderSub").textContent = "New draft";
   $("qLead").value = ""; $("qAddress").value = ""; $("qLeadInfo").textContent = "";
+  $("aInstall").checked = true; $("aInstallAmt").value = ""; $("aPack").value = 0;
+  if ($("qPos")) $("qPos").value = SETTINGS.home_state || "27";
+  applyBuilderDefaults();
   renderItems(); recalc(); updateCart(); goto("builder");
 }
 
@@ -252,6 +305,24 @@ function renderPicker() {
     });
 }
 function pq(id, delta) { const i = $("pq" + id); i.value = Math.max(1, (parseInt(i.value, 10) || 1) + delta); }
+// ---- Product detail modal (image + description/specs + HSN/GST) ----
+function showProductDetail(id) {
+  const p = prod(id); if (!p) return;
+  $("pdTitle").textContent = p.name;
+  const gp = p.gst_pct != null ? p.gst_pct + "%" : "default";
+  $("pdBody").innerHTML =
+    '<div class="pd-grid">' + prodImg(p, "lg") +
+    '<div class="pd-meta">' +
+    '<div class="pd-row"><span>Model</span><b>' + esc(p.model_no || "—") + "</b></div>" +
+    '<div class="pd-row"><span>Category</span><b>' + esc(p.category || "—") + "</b></div>" +
+    '<div class="pd-row"><span>HSN Code</span><b>' + esc(p.hsn_code || "—") + "</b></div>" +
+    '<div class="pd-row"><span>GST %</span><b>' + gp + "</b></div>" +
+    '<div class="pd-row"><span>List price</span><b>₹ ' + Math.round(p.list_price).toLocaleString("en-IN") + "</b></div>" +
+    "</div></div>" +
+    '<div class="pd-desc"><b>Specifications</b><p>' + esc(p.description || "No description available.") + "</p></div>";
+  $("pdetail").classList.add("open");
+}
+function closeProductDetail() { $("pdetail").classList.remove("open"); }
 // Flip a single card's button to match cart state without re-rendering the grid
 // (keeps scroll position).
 function setPickBtn(id) {
@@ -279,50 +350,100 @@ function updateCart() {
 
 // ---- Line items ----
 function removeItem(idx) { LINES.splice(idx, 1); renderItems(); recalc(); updateCart(); }
+// A line's effective GST% = the product's own rate, else the form-level default.
+function lineGstPct(p) {
+  if (p && p.gst_pct != null) return p.gst_pct;
+  return parseFloat($("qGst") && $("qGst").value) || 0;
+}
 function renderItems() {
   const b = $("itemsBody"); b.innerHTML = "";
-  if (!LINES.length) { b.innerHTML = '<tr><td colspan="9"><div class="empty">No items yet — click <b>🛍️ Add Products</b> to build the quote.</div></td></tr>'; return; }
+  if (!LINES.length) { b.innerHTML = '<tr><td colspan="12"><div class="empty">No items yet — click <b>🛍️ Add Products</b> to build the quote.</div></td></tr>'; return; }
   LINES.forEach((ln, idx) => {
     const p = prod(ln.pid); if (!p) return;
     const tr = document.createElement("tr");
+    const gp = lineGstPct(p);
     const costCells = canSeeCost
       ? '<td class="num cost-col" data-cost>' + fmt((p.final_c2e || 0) * ln.qty) + '</td><td class="num cost-col mcell" data-cost></td>'
       : '<td class="num cost-col hide" data-cost></td><td class="num cost-col mcell hide" data-cost></td>';
-    tr.innerHTML = "<td>" + prodImg(p, "sm") + '</td><td class="pname"><b>' + p.name + "</b><br><small>" + (p.model_no || "") +
+    tr.innerHTML = '<td><span style="cursor:pointer" title="View details" onclick="showProductDetail(' + p.id + ')">' + prodImg(p, "sm") + "</span></td>" +
+      '<td class="pname"><b>' + p.name + "</b><br><small>" + (p.model_no || "") +
       '</small></td><td class="num">' + fmt(p.client_unit_price) +
       '</td><td class="num"><input type="number" min="1" value="' + ln.qty + '" onchange="upd(' + idx + ",'qty',this.value)\"></td>" +
       '<td class="num"><input type="number" min="0" max="100" value="' + ln.disc + '" onchange="upd(' + idx + ",'disc',this.value)\"></td>" +
+      '<td class="num"><small>' + (p.hsn_code || "—") + '</small></td>' +
+      '<td class="num">' + gp + '%</td><td class="num gstcell"></td>' +
       costCells + '<td class="num amtcell"></td><td><button class="del" onclick="removeItem(' + idx + ')">✕</button></td>';
     b.appendChild(tr);
   });
 }
-function upd(idx, field, val) { LINES[idx][field] = parseFloat(val) || 0; recalc(); }
+function upd(idx, field, val) {
+  let v = parseFloat(val) || 0;
+  // Hard discount cap: sales cannot exceed the configured maximum.
+  let clamped = false;
+  if (field === "disc" && !canSeeCost && v > SETTINGS.max_discount_pct) {
+    v = SETTINGS.max_discount_pct;
+    clamped = true;
+    toast("Max discount is " + SETTINGS.max_discount_pct + "%. A manager can approve more.", true);
+  }
+  LINES[idx][field] = v;
+  if (clamped) renderItems();
+  recalc();
+}
 
 // ---- Recalc (instant client-side preview; server is authoritative on save) ----
+// Mirrors the backend pricing engine: goods GST per line at the product/default
+// rate, add-ons taxed at the default rate, split CGST/SGST (intra-state) or IGST.
 function recalc() {
-  let sub = 0, gross = 0, cost = 0;
+  let sub = 0, gross = 0, cost = 0, goodsGst = 0;
+  const gstDefault = parseFloat($("qGst") && $("qGst").value) || 0;
   const rows = document.querySelectorAll("#itemsBody tr");
   LINES.forEach((ln, idx) => {
     const p = prod(ln.pid); if (!p) return;
     const lineGross = p.client_unit_price * ln.qty;
     const lineNet = lineGross * (1 - ln.disc / 100);
     const lineCost = (p.final_c2e || 0) * ln.qty;
-    sub += lineNet; gross += lineGross; cost += lineCost;
+    const gp = lineGstPct(p);
+    const gstAmt = lineNet * gp / 100;
+    sub += lineNet; gross += lineGross; cost += lineCost; goodsGst += gstAmt;
     if (rows[idx]) {
       const ac = rows[idx].querySelector(".amtcell"); if (ac) ac.textContent = fmt(lineNet);
+      const gc = rows[idx].querySelector(".gstcell"); if (gc) gc.textContent = fmt(gstAmt);
       const mc = rows[idx].querySelector(".mcell");
       if (mc && canSeeCost) { const m = lineNet - lineCost; const mp = lineNet > 0 ? (m / lineNet * 100) : 0; mc.innerHTML = '<span class="' + (m >= 0 ? "mpos" : "mneg") + '">' + fmt(m) + " · " + mp.toFixed(0) + "%</span>"; }
     }
   });
   const discGiven = gross - sub;
-  const install = $("aInstall").checked ? sub * 0.105 : 0;
+  const instPct = parseFloat($("aInstallPct").value) || 0;
+  const instOverride = $("aInstallAmt").value.trim();
+  const install = !$("aInstall").checked ? 0
+    : (instOverride !== "" ? (parseFloat(instOverride) || 0) : sub * instPct / 100);
   const pack = parseFloat($("aPack").value) || 0;
-  const freight = parseFloat($("aFreight").value) || 0;
-  const grand = sub + install + pack + freight;
+  const localF = parseFloat($("aLocalFreight").value) || 0;
+  const intlF = parseFloat($("aIntlFreight").value) || 0;
+  const imp = parseFloat($("aImport").value) || 0;
+  const freight = localF + intlF + imp;
+  const addonBase = install + pack + freight;
+  const grand = sub + addonBase;                 // pre-tax
+  const taxable = grand;                          // GST base = goods + install + freight
+  const gstTotal = goodsGst + addonBase * gstDefault / 100;
+  const intra = ($("qPos").value || "") === (SETTINGS.home_state || "27");
+  const cgst = intra ? gstTotal / 2 : 0;
+  const sgst = intra ? gstTotal / 2 : 0;
+  const igst = intra ? 0 : gstTotal;
+  const finalPayable = taxable + gstTotal;
+
   $("sSub").textContent = fmt(sub);
   $("sDisc").textContent = "– " + fmt(discGiven);
   $("sInstall").textContent = fmt(install);
+  $("sTaxable").textContent = fmt(taxable);
   $("sGrand").textContent = fmt(grand);
+  $("sFinal").textContent = fmt(finalPayable);
+  $("rowCgst").classList.toggle("hide", !intra);
+  $("rowSgst").classList.toggle("hide", !intra);
+  $("rowIgst").classList.toggle("hide", intra);
+  $("sCgst").textContent = fmt(cgst);
+  $("sSgst").textContent = fmt(sgst);
+  $("sIgst").textContent = fmt(igst);
   if (canSeeCost) {
     const totMargin = sub - cost;
     $("mCost").textContent = fmt(cost);
@@ -332,7 +453,8 @@ function recalc() {
   const overallDisc = gross > 0 ? (discGiven / gross * 100) : 0;
   const anyHigh = LINES.some((l) => l.disc > 15);
   $("approvalBox").classList.toggle("hide", !(overallDisc > 12 || anyHigh));
-  window._Q = { sub, install, pack, freight, grand };
+  window._Q = { sub, install, pack, freight, grand, taxable, gstTotal,
+                cgst, sgst, igst, intra, finalPayable };
 }
 
 // ---- Save quote (server computes authoritative totals) ----
@@ -349,9 +471,14 @@ async function saveQuote() {
       currency: cur(),
       terms_template_id: parseInt($("qTerms").value, 10) || null,
       install_enabled: $("aInstall").checked,
-      install_pct: 0.105,
+      install_pct: (parseFloat($("aInstallPct").value) || 0) / 100,
+      install_amount: $("aInstallAmt").value.trim() !== "" ? (parseFloat($("aInstallAmt").value) || 0) : null,
       packaging: parseFloat($("aPack").value) || 0,
-      freight: parseFloat($("aFreight").value) || 0,
+      local_freight: parseFloat($("aLocalFreight").value) || 0,
+      intl_freight: parseFloat($("aIntlFreight").value) || 0,
+      import_charge: parseFloat($("aImport").value) || 0,
+      place_of_supply: $("qPos").value || null,
+      gst_default_pct: parseFloat($("qGst").value) || 0,
       lines: LINES.map((l) => ({ product_id: l.pid, qty: l.qty, line_disc: l.disc })),
     };
     const q = await API.createQuote(payload);
@@ -388,14 +515,18 @@ function renderPreview() {
     lastPreview.lines.forEach((ln, i) => {
       const tr = document.createElement("tr");
       tr.innerHTML = "<td>" + (i + 1) + "</td><td>" + ln.name + "<br><span style='color:#7a8a99;font-size:11px'>" + (ln.model_no || "") +
-        "</span></td><td class=\"num\">" + fmt(ln.unit_price) + '</td><td class="num">' + ln.qty + '</td><td class="num">' + fmt(ln.line_net) + "</td>";
+        "</span></td><td class=\"num\"><small>" + (ln.hsn_code || "—") + "</small></td><td class=\"num\">" + fmt(ln.unit_price) +
+        '</td><td class="num">' + ln.qty + '</td><td class="num">' + (ln.gst_pct || 0) + '%</td><td class="num">' + fmt(ln.line_net) + "</td>";
       b.appendChild(tr);
     });
     const t = lastPreview.totals;
     $("pvSub").textContent = fmt(t.subtotal_net);
     $("pvInstall").textContent = fmt(t.installation);
     $("pvPack").textContent = fmt(lastPreview.packaging || 0);
-    $("pvGrand").textContent = fmt(t.grand_total);
+    $("pvFreight").textContent = fmt(lastPreview.freight || 0);
+    $("pvTaxable").textContent = fmt(t.taxable_amount);
+    setPreviewTax(t.is_intra_state, t.cgst, t.sgst, t.igst);
+    $("pvGrand").textContent = fmt(t.final_payable);
   } else {
     recalc();
     $("pvNo").textContent = "(unsaved draft)";
@@ -406,15 +537,27 @@ function renderPreview() {
       const tr = document.createElement("tr");
       tr.innerHTML = "<td>" + (i + 1) + '</td><td><div class="cli-thumb">' + prodImg(p, "sm") +
         "<div><b style='color:var(--navy)'>" + p.name + "</b><br><span style='color:#7a8a99;font-size:11px'>" + (p.model_no || "") +
-        "</span></div></div></td><td class=\"num\">" + fmt(p.client_unit_price) + '</td><td class="num">' + ln.qty + '</td><td class="num">' + fmt(net) + "</td>";
+        "</span></div></div></td><td class=\"num\"><small>" + (p.hsn_code || "—") + "</small></td><td class=\"num\">" + fmt(p.client_unit_price) +
+        '</td><td class="num">' + ln.qty + '</td><td class="num">' + lineGstPct(p) + '%</td><td class="num">' + fmt(net) + "</td>";
       b.appendChild(tr);
     });
     const Q = window._Q || {};
     $("pvSub").textContent = fmt(Q.sub || 0);
     $("pvInstall").textContent = fmt(Q.install || 0);
     $("pvPack").textContent = fmt(Q.pack || 0);
-    $("pvGrand").textContent = fmt(Q.grand || 0);
+    $("pvFreight").textContent = fmt(Q.freight || 0);
+    $("pvTaxable").textContent = fmt(Q.taxable || 0);
+    setPreviewTax(Q.intra, Q.cgst || 0, Q.sgst || 0, Q.igst || 0);
+    $("pvGrand").textContent = fmt(Q.finalPayable || 0);
   }
+}
+function setPreviewTax(intra, cgst, sgst, igst) {
+  $("pvRowCgst").classList.toggle("hide", !intra);
+  $("pvRowSgst").classList.toggle("hide", !intra);
+  $("pvRowIgst").classList.toggle("hide", !!intra);
+  $("pvCgst").textContent = fmt(cgst);
+  $("pvSgst").textContent = fmt(sgst);
+  $("pvIgst").textContent = fmt(igst);
 }
 
 // ---- Quote output: PDF / email / revise ----
@@ -459,6 +602,16 @@ async function openQuote(id) {
     $("qLead").value = ""; $("qLeadInfo").textContent = ""; selectedClientId = null;
     if (q.terms_template_id != null) $("qTerms").value = q.terms_template_id;
     if (q.currency && $("curSel").querySelector('option[value="' + q.currency + '"]')) $("curSel").value = q.currency;
+    // Restore GST / add-on / freight fields
+    $("aInstall").checked = q.install_enabled !== false;
+    $("aInstallPct").value = ((q.install_pct || 0.105) * 100).toFixed(1).replace(/\.0$/, "");
+    $("aInstallAmt").value = q.install_amount != null ? q.install_amount : "";
+    $("aPack").value = q.packaging || 0;
+    $("aLocalFreight").value = q.local_freight || 0;
+    $("aIntlFreight").value = q.intl_freight || 0;
+    $("aImport").value = q.import_charge || 0;
+    $("qPos").value = q.place_of_supply || "";
+    if (q.gst_default_pct) $("qGst").value = q.gst_default_pct;
     $("builderSub").textContent = q.quote_no + " · " + q.status.charAt(0).toUpperCase() + q.status.slice(1);
     renderItems(); recalc(); updateCart();
     goto("preview");
@@ -708,6 +861,44 @@ async function saveEmail() {
     from_email: $("esFrom").value.trim(), use_tls: $("esTls").value === "true",
   });
   toast("Email setup saved.");
+}
+
+// --- System Settings (read: manager/admin; save: admin only) ---
+async function renderSettingsMaster() {
+  const c = $("settingsMasterContent");
+  if (!canSeeCost) { c.innerHTML = '<div class="empty">Settings are manager/admin-only.</div>'; return; }
+  let s = SETTINGS;
+  try { s = await API.getSettings(); SETTINGS = s; } catch (e) { /* keep cached */ }
+  const isAdmin = currentUser.role === "admin";
+  const stateOpts = STATE_CODES.map(([code, name]) =>
+    '<option value="' + code + '"' + (s.home_state === code ? " selected" : "") + ">" + code + " · " + esc(name) + "</option>").join("");
+  c.innerHTML =
+    '<div class="card pad"><div class="section-title">Quote Builder Defaults</div><div class="f2">' +
+    '<div class="field"><label>Max discount % (hard cap)' + (isAdmin ? "" : " — admin only") + '</label><input id="stMaxDisc" type="number" step="0.5" value="' + (s.max_discount_pct) + '"' + (isAdmin ? "" : " disabled") + "></div>" +
+    '<div class="field"><label>Default GST %</label><input id="stGst" type="number" step="0.5" value="' + (s.gst_default_pct) + '"' + (isAdmin ? "" : " disabled") + "></div>" +
+    '<div class="field"><label>Installation % </label><input id="stInstall" type="number" step="0.5" value="' + (s.install_pct * 100) + '"' + (isAdmin ? "" : " disabled") + "></div>" +
+    '<div class="field"><label>Home state (place of supply)</label><select id="stHome"' + (isAdmin ? "" : " disabled") + ">" + stateOpts + "</select></div>" +
+    '<div class="field"><label>Local freight (default)</label><input id="stLocal" type="number" value="' + (s.local_freight) + '"' + (isAdmin ? "" : " disabled") + "></div>" +
+    '<div class="field"><label>International freight (default)</label><input id="stIntl" type="number" value="' + (s.intl_freight) + '"' + (isAdmin ? "" : " disabled") + "></div>" +
+    '<div class="field"><label>Import charges (default)</label><input id="stImport" type="number" value="' + (s.import_charge) + '"' + (isAdmin ? "" : " disabled") + "></div>" +
+    "</div>" +
+    (isAdmin ? '<button class="btn primary sm" onclick="saveSettings()">💾 Save Settings</button>'
+             : '<div class="empty" style="text-align:left">Only an admin can change these defaults.</div>') +
+    "</div>";
+}
+async function saveSettings() {
+  try {
+    SETTINGS = await API.saveSettings({
+      max_discount_pct: parseFloat($("stMaxDisc").value) || 0,
+      gst_default_pct: parseFloat($("stGst").value) || 0,
+      install_pct: (parseFloat($("stInstall").value) || 0) / 100,
+      local_freight: parseFloat($("stLocal").value) || 0,
+      intl_freight: parseFloat($("stIntl").value) || 0,
+      import_charge: parseFloat($("stImport").value) || 0,
+      home_state: $("stHome").value,
+    });
+    toast("Settings saved.");
+  } catch (e) { toast("Save failed: " + e.message, true); }
 }
 
 // --- Users (admin-only) ---

@@ -71,8 +71,16 @@ class QuoteCreate(BaseModel):
     terms_template_id: Optional[int] = None
     install_enabled: bool = True
     install_pct: float = 0.105
+    install_amount: Optional[float] = None      # flat charge override (else install_pct)
     packaging: float = 0.0
+    # Freight/import breakdown (flat INR). `freight` kept for back-compat clients.
     freight: float = 0.0
+    local_freight: Optional[float] = None
+    intl_freight: Optional[float] = None
+    import_charge: Optional[float] = None
+    # GST / place of supply. Blank -> settings defaults are used server-side.
+    place_of_supply: Optional[str] = None
+    gst_default_pct: Optional[float] = None
     lines: list[QuoteLineIn] = []
 
 
@@ -128,8 +136,20 @@ class ProductUpdate(BaseModel):
     model_no: Optional[str] = None
     category: Optional[str] = None
     description: Optional[str] = None
+    hsn_code: Optional[str] = None
+    gst_pct: Optional[float] = None
     source_price_inr: Optional[float] = None
     loading_factor: Optional[float] = None
     client_markup: Optional[float] = None
     list_uplift: Optional[float] = None
     markup_base: Optional[str] = None
+
+
+class AppSettingsIn(BaseModel):
+    max_discount_pct: float = 12.0
+    gst_default_pct: float = 18.0
+    install_pct: float = 0.105
+    local_freight: float = 0.0
+    intl_freight: float = 0.0
+    import_charge: float = 0.0
+    home_state: str = "27"

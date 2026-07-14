@@ -134,6 +134,15 @@ table.items input{width:62px;border:1px solid var(--line);border-radius:7px;padd
 .modal-card{background:#fff;width:min(940px,100%);max-height:92vh;border-radius:18px 18px 0 0;display:flex;flex-direction:column;animation:slideup .3s ease;overflow:hidden}
 @media(min-width:760px){.modal{align-items:center}.modal-card{border-radius:18px}}
 @keyframes slideup{from{transform:translateY(40px);opacity:.5}to{transform:none;opacity:1}}
+.pdetail-body{padding:18px 20px;overflow-y:auto}
+.pd-grid{display:grid;grid-template-columns:220px 1fr;gap:20px;align-items:start}
+@media(max-width:560px){.pd-grid{grid-template-columns:1fr}}
+.pd-meta{display:flex;flex-direction:column;gap:8px}
+.pd-row{display:flex;justify-content:space-between;gap:12px;font-size:13px;color:var(--muted);border-bottom:1px solid var(--line);padding-bottom:6px}
+.pd-row b{color:var(--navy)}
+.pd-desc{margin-top:16px}
+.pd-desc b{color:var(--navy);font-size:13px}
+.pd-desc p{margin-top:6px;color:#5b6b7b;font-size:13px;line-height:1.5;white-space:pre-wrap}
 .modal-head{padding:15px 20px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px}
 .modal-head h3{font-size:16px;color:var(--navy);margin-right:auto}
 .modal-close{border:0;background:#eef2f6;width:34px;height:34px;border-radius:9px;font-size:15px;color:var(--navy)}

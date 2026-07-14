@@ -17,7 +17,7 @@ from app.db import get_session
 from app.core.security import get_current_user, can_see_cost
 from app.core.serialize import quote_out, client_preview_out, product_engine_price
 from app.core.pricing import compute_quote, QuoteLineInput, AddOns
-from app.models import Quote, QuoteLine, Product, FxRate, TermsTemplate, EmailSetup
+from app.models import Quote, QuoteLine, Product, FxRate, TermsTemplate, EmailSetup, AppSettings
 from app.schemas import QuoteCreate, QuoteStatusUpdate
 from app.services.pdf import build_quote_pdf
 from app.services.email import send_quote_email
@@ -99,7 +99,12 @@ def _next_quote_no(db: Session) -> str:
     return f"{prefix}{n + 1:04d}"
 
 
-def _build_lines(db: Session, body: QuoteCreate) -> list[QuoteLine]:
+def _get_settings(db: Session) -> AppSettings:
+    s = db.execute(select(AppSettings)).scalars().first()
+    return s or AppSettings()  # transient defaults if never seeded
+
+
+def _build_lines(db: Session, body: QuoteCreate, default_gst_pct: float) -> list[QuoteLine]:
     lines: list[QuoteLine] = []
     for li in body.lines:
         product = db.get(Product, li.product_id) if li.product_id else None
@@ -107,27 +112,62 @@ def _build_lines(db: Session, body: QuoteCreate) -> list[QuoteLine]:
             client_unit, final_c2e = product_engine_price(product)
             name = li.name or product.name
             model_no = li.model_no or product.model_no
+            hsn_code = product.hsn_code
+            gst_pct = product.gst_pct if product.gst_pct is not None else default_gst_pct
         else:
             if li.unit_price is None or not li.name:
                 raise HTTPException(422, "Free-form line needs name and unit_price")
             client_unit, final_c2e = li.unit_price, 0.0
             name, model_no = li.name, li.model_no
+            hsn_code, gst_pct = None, default_gst_pct
         unit_price = li.unit_price if li.unit_price is not None else client_unit
+        line_net = unit_price * li.qty * (1.0 - li.line_disc / 100.0)
         lines.append(QuoteLine(
             product_id=li.product_id, name=name, model_no=model_no,
             qty=li.qty, line_disc=li.line_disc,
+            hsn_code=hsn_code, gst_pct=gst_pct,
+            gst_amount=line_net * gst_pct / 100.0,
             unit_price=unit_price, unit_cost=final_c2e,
         ))
     return lines
 
 
+def _resolve_addons(body: QuoteCreate, s: AppSettings) -> AddOns:
+    """Merge the request with the AppSettings defaults into engine AddOns."""
+    def pick(val, default):
+        return val if val is not None else default
+    local = pick(body.local_freight, body.freight or s.local_freight)
+    intl = pick(body.intl_freight, s.intl_freight)
+    imp = pick(body.import_charge, s.import_charge)
+    return AddOns(
+        install_enabled=body.install_enabled,
+        install_pct=body.install_pct,
+        install_amount=body.install_amount,
+        packaging=body.packaging,
+        local_freight=local, intl_freight=intl, import_charge=imp,
+        gst_default_pct=pick(body.gst_default_pct, s.gst_default_pct),
+        home_state=s.home_state or "",
+        place_of_supply=body.place_of_supply or "",
+    )
+
+
 @router.post("")
 def create_quote(body: QuoteCreate, db: Session = Depends(get_session),
                  user=Depends(get_current_user)):
-    lines = _build_lines(db, body)
+    s = _get_settings(db)
+    # Hard discount cap: only manager/admin may exceed the configured maximum.
+    if not can_see_cost(user.role):
+        over = [li for li in body.lines if li.line_disc > s.max_discount_pct]
+        if over:
+            raise HTTPException(
+                422, f"Line discount exceeds the {s.max_discount_pct:g}% maximum. "
+                     "A manager or admin must approve a higher discount.")
+    addons = _resolve_addons(body, s)
+    lines = _build_lines(db, body, addons.gst_default_pct)
     _, totals = compute_quote(
-        [QuoteLineInput(l.unit_price, l.unit_cost, l.qty, l.line_disc) for l in lines],
-        AddOns(body.install_enabled, body.install_pct, body.packaging, body.freight),
+        [QuoteLineInput(l.unit_price, l.unit_cost, l.qty, l.line_disc, l.gst_pct)
+         for l in lines],
+        addons,
     )
     quote = Quote(
         quote_no=_next_quote_no(db), client_id=body.client_id,
@@ -136,8 +176,15 @@ def create_quote(body: QuoteCreate, db: Session = Depends(get_session),
         share_token=secrets.token_urlsafe(24),
         currency=body.currency, terms_template_id=body.terms_template_id,
         install_enabled=body.install_enabled, install_pct=body.install_pct,
-        packaging=body.packaging, freight=body.freight,
+        install_amount=body.install_amount, packaging=body.packaging,
+        freight=totals.freight, local_freight=addons.local_freight,
+        intl_freight=addons.intl_freight, import_charge=addons.import_charge,
+        place_of_supply=body.place_of_supply, home_state=s.home_state,
+        gst_default_pct=addons.gst_default_pct,
         subtotal_net=totals.subtotal_net, grand_total=totals.grand_total,
+        taxable_amount=totals.taxable_amount, gst_total=totals.gst_total,
+        cgst=totals.cgst, sgst=totals.sgst, igst=totals.igst,
+        final_payable=totals.final_payable,
         total_cost=totals.total_cost, needs_approval=totals.needs_approval,
         lines=lines,
     )
@@ -284,13 +331,19 @@ def revise_quote(quote_id: int, db: Session = Depends(get_session),
         share_token=secrets.token_urlsafe(24),
         currency=src.currency, terms_template_id=src.terms_template_id,
         install_enabled=src.install_enabled, install_pct=src.install_pct,
-        packaging=src.packaging, freight=src.freight,
+        install_amount=src.install_amount, packaging=src.packaging, freight=src.freight,
+        local_freight=src.local_freight, intl_freight=src.intl_freight,
+        import_charge=src.import_charge, place_of_supply=src.place_of_supply,
+        home_state=src.home_state, gst_default_pct=src.gst_default_pct,
         subtotal_net=src.subtotal_net, grand_total=src.grand_total,
+        taxable_amount=src.taxable_amount, gst_total=src.gst_total,
+        cgst=src.cgst, sgst=src.sgst, igst=src.igst, final_payable=src.final_payable,
         total_cost=src.total_cost, needs_approval=src.needs_approval,
         revision_of=src.id, status="draft",
         lines=[QuoteLine(product_id=l.product_id, name=l.name, model_no=l.model_no,
-                         qty=l.qty, line_disc=l.line_disc, unit_price=l.unit_price,
-                         unit_cost=l.unit_cost) for l in src.lines],
+                         qty=l.qty, line_disc=l.line_disc, hsn_code=l.hsn_code,
+                         gst_pct=l.gst_pct, gst_amount=l.gst_amount,
+                         unit_price=l.unit_price, unit_cost=l.unit_cost) for l in src.lines],
     )
     db.add(rev)
     db.commit()

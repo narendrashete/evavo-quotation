@@ -18,7 +18,7 @@ backend/app/
   routers/     auth.py, products.py, quotes.py, masters.py, fx.py, users.py
   services/    email.py (SMTP), pdf.py (branded quote PDF)
   importer/    excel_import.py, parity_check.py (engine-vs-Excel parity gate)
-  models.py    SQLAlchemy ORM (14 entities)
+  models.py    SQLAlchemy ORM (13 entities)
   schemas.py   Pydantic request/response models
   main.py      FastAPI app + router mounting + static file serving
   seed.py      default users, FX rates, demo data
@@ -46,11 +46,19 @@ When adding new fields to products/quotes that touch cost or margin, update `ser
 
 **WhatsApp/Email send** (`routers/quotes.py`): "Send by WhatsApp" is a free `wa.me` click-to-chat link built server-side (`POST /quotes/{id}/whatsapp`, no paid API) and opened client-side via `window.open()`. Email reuses the existing DB-driven Email Setup (Masters > Email Setup — Gmail SMTP + App Password works as-is, no `.env` SMTP config). Both share one message-builder (`_quote_message`) and a public, unauthenticated, token-based PDF link (`GET /quotes/share/{token}/pdf`, looked up by `Quote.share_token` — never by id) so a customer can view/download without logging in; that PDF is always built from `client_preview_out`, so cost/margin are structurally excluded, same guarantee as the authed `/pdf` route.
 
+**GST / tax** (client-safe, never confidential): each `Product` carries an `hsn_code` + `gst_pct`; a line without its own rate falls back to the quote's default GST% (which defaults from `AppSettings.gst_default_pct`, 18%). The **taxable amount is composite** — goods net (after discount) + installation + packaging + freight/import — and GST is charged on the whole. Place of supply (a state code on the quote) vs Evavo's `home_state` (default 27, Maharashtra, in `AppSettings`) decides the split: equal → intra-state → CGST+SGST (each half); different → inter-state → IGST (full). `grand_total` stays **pre-tax**; the new `final_payable` = taxable + GST. All of this lives in `compute_quote` (`pricing.py`) as add-ons layered on top of the parity-gated `compute_unit` — never touch `compute_unit` or its inputs, and keep new totals fields defaulting to 0/off so `test_pricing.py` and the parity gate stay green. GST/HSN fields are **client-safe** (emitted for every role), unlike cost/margin.
+
+**Discount cap** (`AppSettings.max_discount_pct`, default 12%, admin-editable only): a **hard** per-line cap enforced server-side in `create_quote` (422 for sales exceeding it) and client-side (clamp + toast). Manager/admin (`can_see_cost(role)`) may exceed it. This is separate from the softer `needs_approval` thresholds, which are unchanged. `GET /api/masters/settings` is readable by any authenticated user (the builder needs the defaults for sales too); `PUT` is admin-only.
+
+**Editing a saved quote:** quotes remain immutable after creation (only `PATCH /status` and `revise`, which clones a new draft). Product prices are read-only in the builder for all roles; only manager/admin edit them via the Product master. Editing only HSN/GST/name on a product does **not** reset its parity-migrated pricing override — only editing a pricing field (`_PRICING_FIELDS` in `masters.py`) does.
+
 ## Database Entities
 
-`users`, `fx_rates`, `categories`, `products`, `clients`, `projects`, `leads`, `terms_templates`, `email_setup`, `quotes`, `quote_lines`, `cities`
+`users`, `fx_rates`, `categories`, `products`, `clients`, `projects`, `leads`, `terms_templates`, `email_setup`, `app_settings`, `quotes`, `quote_lines`, `cities`
 
 Contact fields: `clients.phone` (landline/office) + `clients.mobile` (WhatsApp default) · `leads.whatsapp_number` (per-lead override, same pattern as `leads.address`) · `quotes.customer_mobile` + `quotes.share_token` (snapshotted per quote).
+
+GST/tax fields: `products.hsn_code` + `products.gst_pct` · `quote_lines.hsn_code`/`gst_pct`/`gst_amount` (snapshots) · `quotes.place_of_supply`/`home_state`/`gst_default_pct` + snapshot totals `taxable_amount`/`gst_total`/`cgst`/`sgst`/`igst`/`final_payable`/`install_amount`/`local_freight`/`intl_freight`/`import_charge`. `app_settings` is a single-row config table (max_discount_pct, gst_default_pct, install_pct, local/intl/import freight defaults, home_state).
 
 ## Running Locally
 

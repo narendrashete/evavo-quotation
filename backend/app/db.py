@@ -68,6 +68,25 @@ _NEW_COLUMNS = [
     ("leads", "whatsapp_number", "VARCHAR(40)"),
     ("quotes", "customer_mobile", "VARCHAR(40)"),
     ("quotes", "share_token", "VARCHAR(48)"),
+    # GST / freight / settings feature
+    ("products", "hsn_code", "VARCHAR(20)"),
+    ("products", "gst_pct", "DOUBLE PRECISION"),
+    ("quotes", "install_amount", "DOUBLE PRECISION"),
+    ("quotes", "local_freight", "DOUBLE PRECISION DEFAULT 0"),
+    ("quotes", "intl_freight", "DOUBLE PRECISION DEFAULT 0"),
+    ("quotes", "import_charge", "DOUBLE PRECISION DEFAULT 0"),
+    ("quotes", "place_of_supply", "VARCHAR(4)"),
+    ("quotes", "home_state", "VARCHAR(4)"),
+    ("quotes", "gst_default_pct", "DOUBLE PRECISION DEFAULT 0"),
+    ("quotes", "taxable_amount", "DOUBLE PRECISION DEFAULT 0"),
+    ("quotes", "gst_total", "DOUBLE PRECISION DEFAULT 0"),
+    ("quotes", "cgst", "DOUBLE PRECISION DEFAULT 0"),
+    ("quotes", "sgst", "DOUBLE PRECISION DEFAULT 0"),
+    ("quotes", "igst", "DOUBLE PRECISION DEFAULT 0"),
+    ("quotes", "final_payable", "DOUBLE PRECISION DEFAULT 0"),
+    ("quote_lines", "hsn_code", "VARCHAR(20)"),
+    ("quote_lines", "gst_pct", "DOUBLE PRECISION DEFAULT 0"),
+    ("quote_lines", "gst_amount", "DOUBLE PRECISION DEFAULT 0"),
 ]
 
 

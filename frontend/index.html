@@ -38,6 +38,7 @@
     <button class="nav-item" data-view="leadsMaster"><span class="ni">🧭</span> Leads</button>
     <button class="nav-item" data-view="termsMaster"><span class="ni">📜</span> Terms</button>
     <button class="nav-item" data-view="emailMaster" data-cost><span class="ni">✉️</span> Email Setup</button>
+    <button class="nav-item" data-view="settingsMaster" data-cost><span class="ni">⚙️</span> Settings</button>
     <div class="nav-group" data-admin>Admin</div>
     <button class="nav-item" data-view="usersMaster" data-admin><span class="ni">🛡️</span> Users</button>
     <div class="sb-foot" id="sbFoot">Connected to live pricing engine</div>
@@ -107,6 +108,8 @@
                 <div class="field" style="grid-column:1/-1"><label>Customer Address</label><textarea id="qAddress" rows="2"></textarea></div>
                 <div class="field"><label>Currency</label><select id="curSel" onchange="recalc()"></select></div>
                 <div class="field"><label>Terms Template</label><select id="qTerms"></select></div>
+                <div class="field"><label>Place of Supply</label><select id="qPos" onchange="recalc()"></select></div>
+                <div class="field"><label>Default GST %</label><input id="qGst" type="number" min="0" step="0.5" value="18" onchange="recalc()" oninput="recalc()"></div>
               </div>
             </div>
             <div class="card pad">
@@ -117,6 +120,7 @@
               </div>
               <div class="tbl-wrap"><table class="items"><thead><tr>
                 <th style="width:56px"></th><th>Product</th><th class="num">Unit Price</th><th class="num">Qty</th><th class="num">Disc %</th>
+                <th class="num">HSN</th><th class="num">GST %</th><th class="num">GST Amt</th>
                 <th class="num cost-col" data-cost>Cost</th><th class="num cost-col" data-cost>Margin</th><th class="num">Amount</th><th></th>
               </tr></thead><tbody id="itemsBody"></tbody></table></div>
             </div>
@@ -126,10 +130,18 @@
             <div class="sum-row"><span class="muted">Items subtotal</span><span id="sSub" class="num">—</span></div>
             <div class="sum-row"><span class="muted">Discount given</span><span id="sDisc" class="num">—</span></div>
             <div style="margin:12px 0 4px" class="section-title">Add-on Charges</div>
-            <div class="addon-row"><label><input type="checkbox" id="aInstall" checked onchange="recalc()"> Installation (10.5%)</label><span id="sInstall" class="num">—</span></div>
+            <div class="addon-row"><label><input type="checkbox" id="aInstall" checked onchange="recalc()"> Installation @ <input type="number" id="aInstallPct" value="10.5" step="0.5" min="0" style="width:56px" onchange="recalc()" oninput="recalc()">%</label><span id="sInstall" class="num">—</span></div>
+            <div class="addon-row"><label>Installation charge (override)</label><input type="number" id="aInstallAmt" placeholder="auto" onchange="recalc()" oninput="recalc()"></div>
             <div class="addon-row"><label>Special packaging</label><input type="number" id="aPack" value="0" onchange="recalc()" oninput="recalc()"></div>
-            <div class="addon-row"><label>Freight / import</label><input type="number" id="aFreight" value="0" onchange="recalc()" oninput="recalc()"></div>
-            <div class="sum-row total" style="margin-top:14px"><span>Grand Total</span><span id="sGrand" class="num">—</span></div>
+            <div class="addon-row"><label>Local freight</label><input type="number" id="aLocalFreight" value="0" onchange="recalc()" oninput="recalc()"></div>
+            <div class="addon-row"><label>International freight</label><input type="number" id="aIntlFreight" value="0" onchange="recalc()" oninput="recalc()"></div>
+            <div class="addon-row"><label>Import charges</label><input type="number" id="aImport" value="0" onchange="recalc()" oninput="recalc()"></div>
+            <div class="sum-row" style="margin-top:10px"><span class="muted">Taxable amount</span><span id="sTaxable" class="num">—</span></div>
+            <div class="sum-row" id="rowCgst"><span class="muted">CGST</span><span id="sCgst" class="num">—</span></div>
+            <div class="sum-row" id="rowSgst"><span class="muted">SGST</span><span id="sSgst" class="num">—</span></div>
+            <div class="sum-row" id="rowIgst"><span class="muted">IGST</span><span id="sIgst" class="num">—</span></div>
+            <div class="sum-row"><span class="muted">Grand total (pre-tax)</span><span id="sGrand" class="num">—</span></div>
+            <div class="sum-row total" style="margin-top:8px"><span>Final Payable</span><span id="sFinal" class="num">—</span></div>
             <div class="approval hide" id="approvalBox">⚠ <b>Approval required.</b> Discount exceeds the 12% policy limit. This quote will route to a manager before it can be sent.</div>
             <div class="margin-box" data-cost>
               <div class="mb-h"><span>Internal — Manager only</span><span class="badge int">CONFIDENTIAL</span></div>
@@ -149,8 +161,8 @@
           <div class="ph"><div><div class="l">EV</div><h2>Evavo Wellness &amp; Solutions LLP</h2><div style="font-size:11.5px;color:#aecbe6;margin-top:4px">Spa Consulting · Spa &amp; Salon Equipment</div></div><div class="qmeta"><b style="color:#fff;font-size:14px">QUOTATION</b><br>No: <span id="pvNo">—</span><br>Date: <span id="pvDate">—</span><br>Valid: 2 weeks</div></div>
           <div class="pb">
             <div class="to"><div><b>Bill To</b><span id="pvBillTo">—</span></div><div style="text-align:right"><b>Currency</b><span id="pvCur">INR (₹)</span></div></div>
-            <table class="cli"><thead><tr><th>#</th><th>Item</th><th class="num">Unit Price</th><th class="num">Qty</th><th class="num">Amount</th></tr></thead><tbody id="pvBody"></tbody></table>
-            <div class="cli-tot"><div class="r"><span>Subtotal</span><span id="pvSub" class="num">—</span></div><div class="r"><span>Installation</span><span id="pvInstall" class="num">—</span></div><div class="r"><span>Packaging</span><span id="pvPack" class="num">—</span></div><div class="r g"><span>Grand Total</span><span id="pvGrand" class="num">—</span></div></div>
+            <table class="cli"><thead><tr><th>#</th><th>Item</th><th class="num">HSN</th><th class="num">Unit Price</th><th class="num">Qty</th><th class="num">GST</th><th class="num">Amount</th></tr></thead><tbody id="pvBody"></tbody></table>
+            <div class="cli-tot"><div class="r"><span>Subtotal</span><span id="pvSub" class="num">—</span></div><div class="r"><span>Installation</span><span id="pvInstall" class="num">—</span></div><div class="r"><span>Packaging</span><span id="pvPack" class="num">—</span></div><div class="r"><span>Freight &amp; import</span><span id="pvFreight" class="num">—</span></div><div class="r"><span>Taxable amount</span><span id="pvTaxable" class="num">—</span></div><div class="r" id="pvRowCgst"><span>CGST</span><span id="pvCgst" class="num">—</span></div><div class="r" id="pvRowSgst"><span>SGST</span><span id="pvSgst" class="num">—</span></div><div class="r" id="pvRowIgst"><span>IGST</span><span id="pvIgst" class="num">—</span></div><div class="r g"><span>Final Payable</span><span id="pvGrand" class="num">—</span></div></div>
             <div class="terms" id="pvTerms"></div>
           </div>
         </div>
@@ -186,6 +198,12 @@
         <div id="emailMasterContent"></div>
       </section>
 
+      <!-- System Settings -->
+      <section class="view" id="settingsMaster">
+        <div class="page-head"><div><h1>Settings</h1><p>Configurable defaults for the Quote Builder. Max discount is admin-only.</p></div></div>
+        <div id="settingsMasterContent"></div>
+      </section>
+
       <!-- Users (admin-only) -->
       <section class="view" id="usersMaster">
         <div class="page-head"><div><h1>Users</h1><p>Create, edit and remove login accounts. Admin-only.</p></div></div>
@@ -204,6 +222,12 @@
   <div class="modal-foot"><span class="cart-cnt" id="cartCnt">0 items in quote</span><button class="btn primary" onclick="closePicker()">Done</button></div>
 </div></div>
 
+<!-- Product detail modal -->
+<div class="modal" id="pdetail"><div class="modal-card">
+  <div class="modal-head"><h3 id="pdTitle">Product</h3><button class="modal-close" onclick="closeProductDetail()">✕</button></div>
+  <div id="pdBody" class="pdetail-body"></div>
+</div></div>
+
 <nav class="bottomnav hide" id="bnav">
   <button class="active" data-view="dashboard"><span class="bi">▦</span>Home</button>
   <button data-view="pipeline"><span class="bi">⇄</span>Pipeline</button>
@@ -214,7 +238,7 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="api.js?v=8"></script>
-<script src="app.js?v=8"></script>
+<script src="api.js?v=9"></script>
+<script src="app.js?v=9"></script>
 </body>
 </html>

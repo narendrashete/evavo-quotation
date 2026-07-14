@@ -94,10 +94,11 @@ def build_quote_pdf(preview: dict, *, currency: str = "INR",
     pdf.set_font("Helvetica", "B", 10)
     pdf.cell(80, 6, currency, 0, 0, "R")
 
-    # --- Line items table ---
+    # --- Line items table (with HSN + GST columns) ---
     pdf.set_xy(10, 66 + 5 * len(address_lines))
-    cols = [(12, "#", "C"), (W - 12 - 38 - 18 - 38, "ITEM", "L"),
-            (38, "UNIT PRICE", "R"), (18, "QTY", "R"), (38, "AMOUNT", "R")]
+    cols = [(10, "#", "C"), (W - 10 - 22 - 34 - 14 - 16 - 34, "ITEM", "L"),
+            (22, "HSN", "L"), (34, "UNIT PRICE", "R"), (14, "QTY", "R"),
+            (16, "GST%", "R"), (34, "AMOUNT", "R")]
     pdf.set_fill_color(*HEADBG)
     pdf.set_text_color(*MUTED)
     pdf.set_font("Helvetica", "B", 8)
@@ -109,17 +110,18 @@ def build_quote_pdf(preview: dict, *, currency: str = "INR",
     pdf.set_draw_color(*LINE)
     for i, ln in enumerate(preview.get("lines", []), start=1):
         pdf.set_font("Helvetica", "", 9)
-        y0 = pdf.get_y()
         pdf.cell(cols[0][0], 7, str(i), "B", 0, "C")
         name = ln.get("name", "")
         model = ln.get("model_no") or ""
         item = name + (f"  ({model})" if model else "")
-        if len(item) > 60:
-            item = item[:57] + "..."
+        if len(item) > 42:
+            item = item[:39] + "..."
         pdf.cell(cols[1][0], 7, item, "B", 0, "L")
-        pdf.cell(cols[2][0], 7, _money(ln["unit_price"], rate_to_inr, currency), "B", 0, "R")
-        pdf.cell(cols[3][0], 7, str(int(ln["qty"]) if float(ln["qty"]).is_integer() else ln["qty"]), "B", 0, "R")
-        pdf.cell(cols[4][0], 7, _money(ln["line_net"], rate_to_inr, currency), "B", 1, "R")
+        pdf.cell(cols[2][0], 7, str(ln.get("hsn_code") or "-"), "B", 0, "L")
+        pdf.cell(cols[3][0], 7, _money(ln["unit_price"], rate_to_inr, currency), "B", 0, "R")
+        pdf.cell(cols[4][0], 7, str(int(ln["qty"]) if float(ln["qty"]).is_integer() else ln["qty"]), "B", 0, "R")
+        pdf.cell(cols[5][0], 7, f"{ln.get('gst_pct', 0):g}%", "B", 0, "R")
+        pdf.cell(cols[6][0], 7, _money(ln["line_net"], rate_to_inr, currency), "B", 1, "R")
 
     # --- Totals (right aligned block) ---
     t = preview.get("totals", {})
@@ -134,10 +136,17 @@ def build_quote_pdf(preview: dict, *, currency: str = "INR",
                  "T" if big else 0, 1, "R")
     total_row("Subtotal", t.get("subtotal_net", 0))
     total_row("Installation", t.get("installation", 0))
-    total_row("Packaging", preview.get("packaging", 0))
+    if preview.get("packaging"):
+        total_row("Packaging", preview.get("packaging", 0))
     if preview.get("freight"):
-        total_row("Freight / import", preview.get("freight", 0))
-    total_row("Grand Total", t.get("grand_total", 0), bold=True, big=True)
+        total_row("Freight & import", preview.get("freight", 0))
+    total_row("Taxable Amount", t.get("taxable_amount", 0))
+    if t.get("is_intra_state"):
+        total_row("CGST", t.get("cgst", 0))
+        total_row("SGST", t.get("sgst", 0))
+    elif t.get("gst_total", 0):
+        total_row("IGST", t.get("igst", 0))
+    total_row("Final Payable", t.get("final_payable", 0), bold=True, big=True)
 
     # --- Terms ---
     if terms_body:
