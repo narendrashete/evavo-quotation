@@ -265,7 +265,8 @@ function renderProducts() {
       const d = document.createElement("div"); d.className = "prod";
       const costRow = (canSeeCost && p.final_c2e != null)
         ? '<div class="prow"><span>Cost (C2E)</span><span class="cost">₹ ' + p.final_c2e.toLocaleString("en-IN") + "</span></div>" : "";
-      d.innerHTML = prodImg(p, "md") + '<div class="pcat">' + p.category + '</div><b>' + p.name +
+      d.innerHTML = '<span style="cursor:pointer" title="View details" onclick="showProductDetail(' + p.id + ')">' + prodImg(p, "md") + "</span>" +
+        '<div class="pcat">' + p.category + '</div><b>' + p.name +
         '</b><div class="pmodel">' + (p.model_no || "") + '</div><div class="prow"><span>List price</span><span class="price">₹ ' +
         Math.round(p.list_price).toLocaleString("en-IN") + "</span></div>" + costRow;
       g.appendChild(d);
@@ -296,7 +297,8 @@ function renderPicker() {
       const d = document.createElement("div"); d.className = "pick";
       const costLine = (canSeeCost && p.final_c2e != null)
         ? '<span class="pk-cost">Cost: ₹ ' + p.final_c2e.toLocaleString("en-IN") + "</span>" : "";
-      d.innerHTML = prodImg(p, "md") + '<div class="pk-b"><span class="pk-cat">' + p.category +
+      d.innerHTML = '<span style="cursor:pointer" title="View details" onclick="showProductDetail(' + p.id + ')">' + prodImg(p, "md") + "</span>" +
+        '<div class="pk-b"><span class="pk-cat">' + p.category +
         '</span><b>' + p.name + '</b><span class="pk-model">' + (p.model_no || "") +
         '</span><span class="pk-price">₹ ' + Math.round(p.client_unit_price).toLocaleString("en-IN") + "</span>" + costLine +
         '</div><div class="pk-add"><div class="qstep"><button onclick="pq(' + p.id + ',-1)">−</button><input id="pq' + p.id +

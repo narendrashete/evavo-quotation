@@ -71,8 +71,9 @@ None currently tracked — repo working tree is clean, no open branches.
 
 ## Current Sprint
 
-No active sprint tracked in-repo. Latest commit: `ed7085b` — "Fix FX rate ordering:
-pick newest by insertion, not just date."
+No active sprint tracked in-repo. Latest commit: `7b2de87` — "Add GST, configurable
+settings, freight breakdown & tax display" — pushed to `main` and deployed live
+(GitHub Actions Tests + Deploy to DigitalOcean, Run 10, both succeeded).
 
 ## Architecture Overview
 
@@ -405,3 +406,6 @@ None currently tracked in-repo.
   image opens the detail modal; client preview and the (decompressed) PDF show
   HSN/Taxable/CGST/SGST/Final Payable with no cost/margin leak; public share PDF
   still works and now shows GST
+- **Deployed:** committed as `7b2de87`, pushed to `origin/main`; GitHub Actions
+  `Tests` (Run 10) and `Deploy to DigitalOcean` (Run 10) both completed
+  successfully — live in production on the Droplet
