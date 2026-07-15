@@ -208,6 +208,9 @@ class Quote(Base):
     final_payable: Mapped[float] = mapped_column(Float, default=0.0)    # taxable + gst
     total_cost: Mapped[float] = mapped_column(Float, default=0.0)       # CONFIDENTIAL
     needs_approval: Mapped[bool] = mapped_column(Boolean, default=False)
+    approved: Mapped[bool] = mapped_column(Boolean, default=False)
+    approved_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     revision_of: Mapped[int | None] = mapped_column(ForeignKey("quotes.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

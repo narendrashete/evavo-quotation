@@ -12,6 +12,7 @@ let FX = { INR: 1 };        // display rate_to_inr by currency
 const SYM = { INR: "₹", USD: "$", EUR: "€" };
 let TERMS = [];
 let currentQuoteId = null;
+let currentQuoteStatus = null;  // status of the loaded quote — non-"draft" locks editing
 let lastPreview = null;     // server client-preview payload after save
 let BUILDER_LEADS = [], BUILDER_PROJECTS = [], BUILDER_CLIENTS = [];
 let selectedClientId = null;  // resolved from the picked Lead, sent with the quote
@@ -44,9 +45,9 @@ const icon = (c) => CATICON[c] || "📦";
 
 // ---- Helpers ----
 const $ = (id) => document.getElementById(id);
-function toast(msg, isErr) {
+function toast(msg, isErr, isOk) {
   const t = $("toast"); t.textContent = msg;
-  t.className = "toast show" + (isErr ? " err" : "");
+  t.className = "toast show" + (isErr ? " err" : isOk ? " ok" : "");
   setTimeout(() => { t.className = "toast"; }, 2600);
 }
 function cur() { const s = $("curSel"); return s && s.value ? s.value : "INR"; }
@@ -244,13 +245,27 @@ document.querySelectorAll(".nav-item,.bottomnav button").forEach((b) => {
   if (b.dataset.view) b.addEventListener("click", () => goto(b.dataset.view));
 });
 function newQuote() {
-  LINES = []; currentQuoteId = null; lastPreview = null; selectedClientId = null;
+  LINES = []; currentQuoteId = null; currentQuoteStatus = null; lastPreview = null; selectedClientId = null;
   $("builderSub").textContent = "New draft";
   $("qLead").value = ""; $("qAddress").value = ""; $("qLeadInfo").textContent = "";
   $("aInstall").checked = true; $("aInstallAmt").value = ""; $("aPack").value = 0;
   if ($("qPos")) $("qPos").value = SETTINGS.home_state || "27";
   applyBuilderDefaults();
+  applyLockState();
   renderItems(); recalc(); updateCart(); goto("builder");
+}
+
+// ---- Edit lock: only a "draft" quote is editable; anything else is locked
+// until Revise forks a new draft copy. ----
+const BUILDER_LOCK_IDS = ["qLead", "qCustomer", "qEmail", "qMobile", "qAddress", "curSel",
+  "qTerms", "qPos", "qGst", "aInstall", "aInstallPct", "aInstallAmt", "aPack",
+  "aLocalFreight", "aIntlFreight", "aImport", "saveBtn", "addProductsBtn"];
+function isLocked() { return !!(currentQuoteStatus && currentQuoteStatus !== "draft"); }
+function applyLockState() {
+  const locked = isLocked();
+  BUILDER_LOCK_IDS.forEach((id) => { const el = $(id); if (el) el.disabled = locked; });
+  $("lockedBanner").classList.toggle("hide", !locked);
+  if (locked) $("lockedStatus").textContent = currentQuoteStatus;
 }
 
 // ---- Product catalog ----
@@ -312,17 +327,40 @@ function showProductDetail(id) {
   const p = prod(id); if (!p) return;
   $("pdTitle").textContent = p.name;
   const gp = p.gst_pct != null ? p.gst_pct + "%" : "default";
+  const hsnRow = canSeeCost
+    ? '<div class="pd-row"><span>HSN Code</span><input id="pdHsn" value="' + esc(p.hsn_code || "") +
+      '" placeholder="—" style="width:120px;text-align:right;border:1px solid var(--line);border-radius:6px;padding:3px 7px"></div>'
+    : '<div class="pd-row"><span>HSN Code</span><b>' + esc(p.hsn_code || "—") + "</b></div>";
+  const gstRow = canSeeCost
+    ? '<div class="pd-row"><span>GST %</span><input id="pdGst" type="number" min="0" step="0.5" value="' +
+      (p.gst_pct != null ? p.gst_pct : "") + '" placeholder="default" style="width:80px;text-align:right;border:1px solid var(--line);border-radius:6px;padding:3px 7px"></div>'
+    : '<div class="pd-row"><span>GST %</span><b>' + gp + "</b></div>";
+  const saveRow = canSeeCost
+    ? '<button class="btn primary sm" style="margin-top:6px" onclick="saveProductEdit(' + p.id + ')">💾 Save</button>' : "";
   $("pdBody").innerHTML =
     '<div class="pd-grid">' + prodImg(p, "lg") +
     '<div class="pd-meta">' +
     '<div class="pd-row"><span>Model</span><b>' + esc(p.model_no || "—") + "</b></div>" +
     '<div class="pd-row"><span>Category</span><b>' + esc(p.category || "—") + "</b></div>" +
-    '<div class="pd-row"><span>HSN Code</span><b>' + esc(p.hsn_code || "—") + "</b></div>" +
-    '<div class="pd-row"><span>GST %</span><b>' + gp + "</b></div>" +
+    hsnRow + gstRow +
     '<div class="pd-row"><span>List price</span><b>₹ ' + Math.round(p.list_price).toLocaleString("en-IN") + "</b></div>" +
+    saveRow +
     "</div></div>" +
     '<div class="pd-desc"><b>Specifications</b><p>' + esc(p.description || "No description available.") + "</p></div>";
   $("pdetail").classList.add("open");
+}
+async function saveProductEdit(id) {
+  const hsn_code = $("pdHsn").value.trim() || null;
+  const gstRaw = $("pdGst").value.trim();
+  const gst_pct = gstRaw !== "" ? parseFloat(gstRaw) : null;
+  try {
+    await API.updateProduct(id, { hsn_code, gst_pct });
+    const p = prod(id);
+    if (p) { p.hsn_code = hsn_code; p.gst_pct = gst_pct; }
+    toast("Product updated.");
+    renderProducts();
+    showProductDetail(id);
+  } catch (e) { toast("Update failed: " + e.message, true); }
 }
 function closeProductDetail() { $("pdetail").classList.remove("open"); }
 // Flip a single card's button to match cart state without re-rendering the grid
@@ -360,6 +398,7 @@ function lineGstPct(p) {
 function renderItems() {
   const b = $("itemsBody"); b.innerHTML = "";
   if (!LINES.length) { b.innerHTML = '<tr><td colspan="12"><div class="empty">No items yet — click <b>🛍️ Add Products</b> to build the quote.</div></td></tr>'; return; }
+  const dis = isLocked() ? "disabled" : "";
   LINES.forEach((ln, idx) => {
     const p = prod(ln.pid); if (!p) return;
     const tr = document.createElement("tr");
@@ -370,11 +409,11 @@ function renderItems() {
     tr.innerHTML = '<td><span style="cursor:pointer" title="View details" onclick="showProductDetail(' + p.id + ')">' + prodImg(p, "sm") + "</span></td>" +
       '<td class="pname"><b>' + p.name + "</b><br><small>" + (p.model_no || "") +
       '</small></td><td class="num">' + fmt(p.client_unit_price) +
-      '</td><td class="num"><input type="number" min="1" value="' + ln.qty + '" onchange="upd(' + idx + ",'qty',this.value)\"></td>" +
-      '<td class="num"><input type="number" min="0" max="100" value="' + ln.disc + '" onchange="upd(' + idx + ",'disc',this.value)\"></td>" +
+      '</td><td class="num"><input type="number" min="1" value="' + ln.qty + '" ' + dis + ' onchange="upd(' + idx + ",'qty',this.value)\"></td>" +
+      '<td class="num"><input type="number" min="0" max="100" value="' + ln.disc + '" ' + dis + ' onchange="upd(' + idx + ",'disc',this.value)\"></td>" +
       '<td class="num"><small>' + (p.hsn_code || "—") + '</small></td>' +
       '<td class="num">' + gp + '%</td><td class="num gstcell"></td>' +
-      costCells + '<td class="num amtcell"></td><td><button class="del" onclick="removeItem(' + idx + ')">✕</button></td>';
+      costCells + '<td class="num amtcell"></td><td><button class="del" ' + dis + ' onclick="removeItem(' + idx + ')">✕</button></td>';
     b.appendChild(tr);
   });
 }
@@ -461,6 +500,10 @@ function recalc() {
 
 // ---- Save quote (server computes authoritative totals) ----
 async function saveQuote() {
+  if (isLocked()) {
+    toast("This quote is locked (" + currentQuoteStatus + "). Click Revise to edit a copy.", true);
+    return;
+  }
   if (!LINES.length) { toast("Add at least one product first.", true); return; }
   $("saveBtn").disabled = true;
   try {
@@ -483,10 +526,13 @@ async function saveQuote() {
       gst_default_pct: parseFloat($("qGst").value) || 0,
       lines: LINES.map((l) => ({ product_id: l.pid, qty: l.qty, line_disc: l.disc })),
     };
-    const q = await API.createQuote(payload);
+    const q = currentQuoteId
+      ? await API.updateQuote(currentQuoteId, payload)
+      : await API.createQuote(payload);
     currentQuoteId = q.id;
+    currentQuoteStatus = q.status;
     lastPreview = await API.previewQuote(q.id);
-    $("builderSub").textContent = q.quote_no + " · " + (q.totals.needs_approval ? "Needs approval" : "Draft");
+    $("builderSub").textContent = q.quote_no + " · " + (q.totals.needs_approval && !q.approved ? "Pending Approval" : "Draft");
     toast("Quote " + q.quote_no + " saved.");
     await loadDashboard();
     goto("preview");
@@ -529,6 +575,12 @@ function renderPreview() {
     $("pvTaxable").textContent = fmt(t.taxable_amount);
     setPreviewTax(t.is_intra_state, t.cgst, t.sgst, t.igst);
     $("pvGrand").textContent = fmt(t.final_payable);
+    const pending = !!(t.needs_approval && !lastPreview.approved);
+    $("pvApprovalBadge").classList.toggle("hide", !pending);
+    $("previewApprovalNote").classList.toggle("hide", !pending);
+    const blockSend = pending && !canSeeCost;
+    $("emailBtn").disabled = blockSend;
+    $("waBtn").disabled = blockSend;
   } else {
     recalc();
     $("pvNo").textContent = "(unsaved draft)";
@@ -551,6 +603,10 @@ function renderPreview() {
     $("pvTaxable").textContent = fmt(Q.taxable || 0);
     setPreviewTax(Q.intra, Q.cgst || 0, Q.sgst || 0, Q.igst || 0);
     $("pvGrand").textContent = fmt(Q.finalPayable || 0);
+    $("pvApprovalBadge").classList.add("hide");
+    $("previewApprovalNote").classList.add("hide");
+    $("emailBtn").disabled = false;
+    $("waBtn").disabled = false;
   }
 }
 function setPreviewTax(intra, cgst, sgst, igst) {
@@ -580,7 +636,9 @@ async function emailCurrent() {
   if (!requireSaved()) return;
   try {
     const r = await API.emailQuote(currentQuoteId);
-    toast(r.dry_run ? "Dry run — configure Email Setup to actually send (to " + r.to + ")" : "Emailed to " + r.to);
+    if (r.sent && !r.dry_run) { currentQuoteStatus = "sent"; applyLockState(); }
+    toast(r.dry_run ? "Dry run — configure Email Setup to actually send (to " + r.to + ")"
+                     : "Email sent successfully to " + r.to, false, !r.dry_run);
   } catch (e) { toast("Email failed: " + e.message, true); }
 }
 async function whatsappCurrent() {
@@ -596,6 +654,7 @@ async function openQuote(id) {
     const q = await API.getQuote(id);
     lastPreview = await API.previewQuote(id);
     currentQuoteId = q.id;
+    currentQuoteStatus = q.status;
     LINES = q.lines.map((l) => ({ pid: l.product_id, qty: l.qty, disc: l.line_disc }));
     $("qCustomer").value = q.customer_name || "";
     $("qEmail").value = q.customer_email || "";
@@ -615,6 +674,7 @@ async function openQuote(id) {
     $("qPos").value = q.place_of_supply || "";
     if (q.gst_default_pct) $("qGst").value = q.gst_default_pct;
     $("builderSub").textContent = q.quote_no + " · " + q.status.charAt(0).toUpperCase() + q.status.slice(1);
+    applyLockState();
     renderItems(); recalc(); updateCart();
     goto("preview");
     toast("Opened " + q.quote_no);
@@ -624,9 +684,10 @@ async function reviseCurrent() {
   if (!requireSaved()) return;
   try {
     const rev = await API.reviseQuote(currentQuoteId);
-    currentQuoteId = rev.id; lastPreview = null;
+    currentQuoteId = rev.id; currentQuoteStatus = rev.status; lastPreview = null;
     LINES = rev.lines.map((l) => ({ pid: l.product_id, qty: l.qty, disc: l.line_disc }));
     $("builderSub").textContent = rev.quote_no + " · Revision draft";
+    applyLockState();
     renderItems(); recalc(); updateCart();
     toast("Created revision " + rev.quote_no);
     goto("builder");
@@ -969,9 +1030,36 @@ async function loadDashboard() {
   const [quotes, leads] = await Promise.all([API.quotes(), API.leads()]);
   renderKpis(quotes, leads);
   renderRecentQuotes(quotes);
+  renderApprovalsPending(quotes);
   renderPipelineBars(leads);
   renderFxRows();
   renderKanban(leads);
+}
+function renderApprovalsPending(quotes) {
+  const card = $("approvalsPanelCard");
+  const pending = quotes.filter((q) => q.needs_approval && !q.approved);
+  const show = canSeeCost && pending.length > 0;
+  card.classList.toggle("hide", !show);
+  const b = $("approvalsPending"); b.innerHTML = "";
+  if (!show) return;
+  pending.forEach((q) => {
+    const tr = document.createElement("tr");
+    tr.style.cursor = "pointer";
+    tr.title = "Open " + q.quote_no;
+    tr.innerHTML = "<td>" + q.quote_no + "</td><td>" + q.customer_name + '</td><td class="num">₹' +
+      Math.round(q.grand_total).toLocaleString("en-IN") +
+      '</td><td><button class="btn teal sm" onclick="approveQuoteRow(' + q.id + ",'" + q.quote_no + "',event)\">✓ Approve</button></td>";
+    tr.onclick = () => openQuote(q.id);
+    b.appendChild(tr);
+  });
+}
+async function approveQuoteRow(id, quoteNo, event) {
+  if (event) event.stopPropagation();
+  try {
+    await API.approveQuote(id);
+    toast("Approved " + quoteNo + ".");
+    await loadDashboard();
+  } catch (e) { toast("Approve failed: " + e.message, true); }
 }
 function renderKpis(quotes, leads) {
   const open = quotes.filter((q) => q.status !== "won").length;

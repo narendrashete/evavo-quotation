@@ -46,10 +46,12 @@ const API = (() => {
     terms: () => request("GET", "/api/masters/terms"),
     quotes: () => request("GET", "/api/quotes"),
     createQuote: (data) => request("POST", "/api/quotes", data),
+    updateQuote: (id, data) => request("PUT", "/api/quotes/" + id, data),
     getQuote: (id) => request("GET", "/api/quotes/" + id),
     previewQuote: (id) => request("GET", "/api/quotes/" + id + "/preview"),
     setQuoteStatus: (id, status) =>
       request("PATCH", "/api/quotes/" + id + "/status", { status }),
+    approveQuote: (id) => request("PATCH", "/api/quotes/" + id + "/approve"),
     emailQuote: (id) => request("POST", "/api/quotes/" + id + "/email"),
     sendWhatsapp: (id) => request("POST", "/api/quotes/" + id + "/whatsapp"),
     reviseQuote: (id) => request("POST", "/api/quotes/" + id + "/revise"),

@@ -116,6 +116,7 @@ def quote_out(quote, include_cost: bool, db: "Session | None" = None) -> dict:
 
     out = {
         "id": quote.id, "quote_no": quote.quote_no, "status": quote.status,
+        "approved": quote.approved,
         "customer_name": quote.customer_name, "customer_email": quote.customer_email,
         "customer_address": quote.customer_address, "customer_mobile": quote.customer_mobile,
         "currency": quote.currency, "terms_template_id": quote.terms_template_id,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import secrets
-from datetime import date
+from datetime import date, datetime
 from urllib.parse import quote as urlquote
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db import get_session
-from app.core.security import get_current_user, can_see_cost
+from app.core.security import get_current_user, can_see_cost, require_role
 from app.core.serialize import quote_out, client_preview_out, product_engine_price
 from app.core.pricing import compute_quote, QuoteLineInput, AddOns
 from app.models import Quote, QuoteLine, Product, FxRate, TermsTemplate, EmailSetup, AppSettings
@@ -171,10 +171,8 @@ def _resolve_addons(body: QuoteCreate, s: AppSettings) -> AddOns:
     )
 
 
-@router.post("")
-def create_quote(body: QuoteCreate, db: Session = Depends(get_session),
-                 user=Depends(get_current_user)):
-    s = _get_settings(db)
+def _prepare_quote_write(db: Session, body: QuoteCreate, user, s: AppSettings):
+    """Shared by create/update: hard discount cap check, then build lines + totals."""
     # Hard discount cap: only manager/admin may exceed the configured maximum.
     if not can_see_cost(user.role):
         over = [li for li in body.lines if li.line_disc > s.max_discount_pct]
@@ -189,6 +187,14 @@ def create_quote(body: QuoteCreate, db: Session = Depends(get_session),
          for l in lines],
         addons,
     )
+    return lines, totals, addons
+
+
+@router.post("")
+def create_quote(body: QuoteCreate, db: Session = Depends(get_session),
+                 user=Depends(get_current_user)):
+    s = _get_settings(db)
+    lines, totals, addons = _prepare_quote_write(db, body, user, s)
     quote = Quote(
         quote_no=_next_quote_no(db), client_id=body.client_id,
         customer_name=body.customer_name, customer_email=body.customer_email,
@@ -214,6 +220,59 @@ def create_quote(body: QuoteCreate, db: Session = Depends(get_session),
     return quote_out(quote, can_see_cost(user.role))
 
 
+@router.put("/{quote_id}")
+def update_quote(quote_id: int, body: QuoteCreate, db: Session = Depends(get_session),
+                 user=Depends(get_current_user)):
+    """Update an existing draft in place (same id/quote_no/share_token).
+
+    Once a quote leaves "draft" it's locked — nobody (including admin) can edit
+    it directly here; "Revise" is the only way to change it (forks a new draft).
+    """
+    quote = db.get(Quote, quote_id)
+    if not quote:
+        raise HTTPException(404, "Quote not found")
+    if quote.status != "draft":
+        raise HTTPException(
+            403, f"Quote is locked (status: {quote.status}). "
+                 "Use Revise to create an editable copy.")
+    s = _get_settings(db)
+    lines, totals, addons = _prepare_quote_write(db, body, user, s)
+    quote.client_id = body.client_id
+    quote.customer_name = body.customer_name
+    quote.customer_email = body.customer_email
+    quote.customer_address = body.customer_address
+    quote.customer_mobile = body.customer_mobile
+    quote.currency = body.currency
+    quote.terms_template_id = body.terms_template_id
+    quote.install_enabled = body.install_enabled
+    quote.install_pct = body.install_pct
+    quote.install_amount = body.install_amount
+    quote.packaging = body.packaging
+    quote.freight = totals.freight
+    quote.local_freight = addons.local_freight
+    quote.intl_freight = addons.intl_freight
+    quote.import_charge = addons.import_charge
+    quote.place_of_supply = body.place_of_supply
+    quote.home_state = s.home_state
+    quote.gst_default_pct = addons.gst_default_pct
+    quote.subtotal_net = totals.subtotal_net
+    quote.grand_total = totals.grand_total
+    quote.taxable_amount = totals.taxable_amount
+    quote.gst_total = totals.gst_total
+    quote.cgst = totals.cgst
+    quote.sgst = totals.sgst
+    quote.igst = totals.igst
+    quote.final_payable = totals.final_payable
+    quote.total_cost = totals.total_cost
+    quote.needs_approval = totals.needs_approval
+    quote.approved = False  # edited content invalidates any prior approval
+    quote.lines.clear()
+    quote.lines.extend(lines)
+    db.commit()
+    db.refresh(quote)
+    return quote_out(quote, can_see_cost(user.role))
+
+
 @router.get("")
 def list_quotes(db: Session = Depends(get_session), user=Depends(get_current_user)):
     rows = db.execute(select(Quote).order_by(Quote.id.desc())).scalars().all()
@@ -222,6 +281,7 @@ def list_quotes(db: Session = Depends(get_session), user=Depends(get_current_use
         "id": q.id, "quote_no": q.quote_no, "customer_name": q.customer_name,
         "status": q.status, "currency": q.currency,
         "grand_total": round(q.grand_total, 2), "needs_approval": q.needs_approval,
+        "approved": q.approved,
         **({"total_cost": round(q.total_cost, 2)} if include else {}),
     } for q in rows]
 
@@ -253,11 +313,31 @@ def set_status(quote_id: int, body: QuoteStatusUpdate,
         raise HTTPException(404, "Quote not found")
     if body.status not in ("draft", "sent", "negotiation", "won"):
         raise HTTPException(422, "Invalid status")
-    if q.needs_approval and body.status == "sent" and not can_see_cost(user.role):
+    if (q.needs_approval and not q.approved and body.status == "sent"
+            and not can_see_cost(user.role)):
         raise HTTPException(403, "Quote needs manager approval before it can be sent")
     q.status = body.status
     db.commit()
     return {"id": q.id, "status": q.status}
+
+
+@router.patch("/{quote_id}/approve")
+def approve_quote(quote_id: int, db: Session = Depends(get_session),
+                  user=Depends(require_role("manager", "admin"))):
+    """Manager/admin sign-off on a quote that exceeded the discount policy —
+    unblocks email/WhatsApp sending for whoever created it, without changing
+    the quote's id/quote_no."""
+    q = db.get(Quote, quote_id)
+    if not q:
+        raise HTTPException(404, "Quote not found")
+    if not q.needs_approval:
+        raise HTTPException(422, "Quote does not require approval")
+    q.approved = True
+    q.approved_by = user.email
+    q.approved_at = datetime.utcnow()
+    db.commit()
+    return {"id": q.id, "approved": q.approved, "approved_by": q.approved_by,
+            "approved_at": q.approved_at.isoformat()}
 
 
 @router.get("/{quote_id}/pdf")
@@ -293,7 +373,7 @@ def quote_email(quote_id: int, request: Request, db: Session = Depends(get_sessi
     q = db.get(Quote, quote_id)
     if not q:
         raise HTTPException(404, "Quote not found")
-    if q.needs_approval and not can_see_cost(user.role):
+    if q.needs_approval and not q.approved and not can_see_cost(user.role):
         raise HTTPException(403, "Quote needs manager approval before it can be emailed")
     if not q.customer_email:
         raise HTTPException(422, "Quote has no client email address")
@@ -320,7 +400,7 @@ def quote_whatsapp(quote_id: int, request: Request, db: Session = Depends(get_se
     q = db.get(Quote, quote_id)
     if not q:
         raise HTTPException(404, "Quote not found")
-    if q.needs_approval and not can_see_cost(user.role):
+    if q.needs_approval and not q.approved and not can_see_cost(user.role):
         raise HTTPException(403, "Quote needs manager approval before it can be sent")
     if not q.customer_mobile:
         raise HTTPException(
@@ -388,7 +468,7 @@ def revise_quote(quote_id: int, db: Session = Depends(get_session),
         taxable_amount=src.taxable_amount, gst_total=src.gst_total,
         cgst=src.cgst, sgst=src.sgst, igst=src.igst, final_payable=src.final_payable,
         total_cost=src.total_cost, needs_approval=src.needs_approval,
-        revision_of=src.id, status="draft",
+        revision_of=src.id, status="draft", approved=False,
         lines=[QuoteLine(product_id=l.product_id, name=l.name, model_no=l.model_no,
                          qty=l.qty, line_disc=l.line_disc, hsn_code=l.hsn_code,
                          gst_pct=l.gst_pct, gst_amount=l.gst_amount,

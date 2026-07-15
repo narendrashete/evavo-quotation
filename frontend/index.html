@@ -56,6 +56,10 @@
       <section class="view active" id="dashboard">
         <div class="page-head"><div><h1 id="welcome">Welcome back</h1><p>Here's what's happening across your quotes today.</p></div><button class="btn primary" onclick="newQuote()">＋ New Quote</button></div>
         <div class="kpis" id="kpis"></div>
+        <div class="card pad hide" id="approvalsPanelCard" style="margin-bottom:16px">
+          <div class="section-title">⏳ Approvals Pending</div>
+          <table class="tbl"><thead><tr><th>Quote No.</th><th>Client</th><th class="num">Value</th><th></th></tr></thead><tbody id="approvalsPending"></tbody></table>
+        </div>
         <div class="dash-grid">
           <div class="card pad">
             <div class="section-title">Recent Quotes</div>
@@ -94,6 +98,7 @@
       <!-- Quote Builder -->
       <section class="view" id="builder">
         <div class="page-head"><div><h1>Quote Builder</h1><p id="builderSub">New draft</p></div><div style="display:flex;gap:9px"><button class="btn ghost" onclick="goto('preview')">Preview</button><button class="btn teal" id="saveBtn" onclick="saveQuote()">💾 Save Quote</button></div></div>
+        <div class="locked-banner hide" id="lockedBanner">🔒 <b>This quote is locked</b> (status: <span id="lockedStatus">—</span>) — editing is disabled. Click Revise to create an editable copy. <button class="btn ghost sm" onclick="reviseCurrent()">🔁 Revise</button></div>
         <div class="qb-grid">
           <div>
             <div class="card pad" style="margin-bottom:16px">
@@ -116,7 +121,7 @@
               <div class="section-title">Line Items</div>
               <div class="additem">
                 <span style="font-size:12.5px;color:var(--muted);flex:1;min-width:160px">🖼️ Browse the catalog with product images, set quantity, and add items to the quote.</span>
-                <button class="btn primary sm" onclick="openPicker()" style="height:39px">🛍️ Add Products<span class="cartbadge" id="addBadge">0</span></button>
+                <button class="btn primary sm" id="addProductsBtn" onclick="openPicker()" style="height:39px">🛍️ Add Products<span class="cartbadge" id="addBadge">0</span></button>
               </div>
               <div class="tbl-wrap"><table class="items"><thead><tr>
                 <th style="width:56px"></th><th>Product</th><th class="num">Unit Price</th><th class="num">Qty</th><th class="num">Disc %</th>
@@ -142,7 +147,7 @@
             <div class="sum-row" id="rowIgst"><span class="muted">IGST</span><span id="sIgst" class="num">—</span></div>
             <div class="sum-row"><span class="muted">Grand total (pre-tax)</span><span id="sGrand" class="num">—</span></div>
             <div class="sum-row total" style="margin-top:8px"><span>Final Payable</span><span id="sFinal" class="num">—</span></div>
-            <div class="approval hide" id="approvalBox">⚠ <b>Approval required.</b> Discount exceeds the 12% policy limit. This quote will route to a manager before it can be sent.</div>
+            <div class="approval hide" id="approvalBox">⚠ <b>Approval required.</b> This discount exceeds policy — the quote will save in <b>Pending Approval</b> status and can't be emailed or WhatsApped until a manager/admin approves it.</div>
             <div class="margin-box" data-cost>
               <div class="mb-h"><span>Internal — Manager only</span><span class="badge int">CONFIDENTIAL</span></div>
               <div class="mb-v"><span>Total cost (C2E)</span><span id="mCost" class="num">—</span></div>
@@ -158,7 +163,8 @@
         <div class="page-head"><div><h1>Client Preview</h1><p>Exactly what the client receives — selling prices only.</p></div><div style="display:flex;gap:9px;flex-wrap:wrap"><button class="btn ghost" onclick="goto('builder')">← Edit</button><button class="btn ghost" id="reviseBtn" onclick="reviseCurrent()">🔁 Revise</button><button class="btn primary" id="pdfBtn" onclick="downloadPdf()">⬇ Download PDF</button><button class="btn teal" id="emailBtn" onclick="emailCurrent()">✉ Email to client</button><button class="btn whatsapp" id="waBtn" onclick="whatsappCurrent()">📱 Send by WhatsApp</button></div></div>
         <div class="safe-note">🔒 Client-safe view — internal cost, margin and FX build-up are never included in this document.</div>
         <div class="paper">
-          <div class="ph"><div><div class="l">EV</div><h2>Evavo Wellness &amp; Solutions LLP</h2><div style="font-size:11.5px;color:#aecbe6;margin-top:4px">Spa Consulting · Spa &amp; Salon Equipment</div></div><div class="qmeta"><b style="color:#fff;font-size:14px">QUOTATION</b><br>No: <span id="pvNo">—</span><br>Date: <span id="pvDate">—</span><br>Valid: 2 weeks</div></div>
+          <div class="ph"><div><div class="l">EV</div><h2>Evavo Wellness &amp; Solutions LLP</h2><div style="font-size:11.5px;color:#aecbe6;margin-top:4px">Spa Consulting · Spa &amp; Salon Equipment</div></div><div class="qmeta"><b style="color:#fff;font-size:14px">QUOTATION</b><br>No: <span id="pvNo">—</span><br>Date: <span id="pvDate">—</span><br>Valid: 2 weeks<br><span class="badge warn hide" id="pvApprovalBadge" style="margin-top:6px;display:inline-block">⏳ Pending Approval</span></div></div>
+          <div class="approval hide" id="previewApprovalNote" style="margin:16px 16px 0">⏳ <b>Awaiting manager approval</b> — this quote exceeds the discount policy and can't be emailed or WhatsApped until a manager/admin approves it.</div>
           <div class="pb">
             <div class="to"><div><b>Bill To</b><span id="pvBillTo">—</span></div><div style="text-align:right"><b>Currency</b><span id="pvCur">INR (₹)</span></div></div>
             <table class="cli"><thead><tr><th>#</th><th>Item</th><th class="num">HSN</th><th class="num">Unit Price</th><th class="num">Qty</th><th class="num">GST</th><th class="num">Amount</th></tr></thead><tbody id="pvBody"></tbody></table>
@@ -238,7 +244,7 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="api.js?v=9"></script>
-<script src="app.js?v=9"></script>
+<script src="api.js?v=10"></script>
+<script src="app.js?v=10"></script>
 </body>
 </html>

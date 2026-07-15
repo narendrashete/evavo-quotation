@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "evavo-dev",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["backend/dev_server.py"],
+      "port": 8013
+    }
+  ]
+}

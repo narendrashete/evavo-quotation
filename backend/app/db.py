@@ -87,6 +87,10 @@ _NEW_COLUMNS = [
     ("quote_lines", "hsn_code", "VARCHAR(20)"),
     ("quote_lines", "gst_pct", "DOUBLE PRECISION DEFAULT 0"),
     ("quote_lines", "gst_amount", "DOUBLE PRECISION DEFAULT 0"),
+    # Explicit approval workflow
+    ("quotes", "approved", "BOOLEAN DEFAULT FALSE"),
+    ("quotes", "approved_by", "VARCHAR(120)"),
+    ("quotes", "approved_at", "TIMESTAMP"),
 ]
 
 
