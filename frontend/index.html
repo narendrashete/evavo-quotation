@@ -107,8 +107,8 @@
                 <div class="field" style="grid-column:1/-1"><label>Lead</label><select id="qLead" onchange="onLeadSelected()"><option value="">— none, enter manually —</option></select>
                   <div id="qLeadInfo" style="font-size:11.5px;color:var(--muted);margin-top:4px"></div>
                 </div>
-                <div class="field"><label>Customer</label><input id="qCustomer" value="Ghareni Spa &amp; Salon Pvt Ltd"></div>
-                <div class="field"><label>Client Email</label><input id="qEmail" value="purchase@gharenispa.in"></div>
+                <div class="field"><label>Customer</label><input id="qCustomer" placeholder="Customer / company name"></div>
+                <div class="field"><label>Client Email</label><input id="qEmail" type="email" placeholder="client@example.com"></div>
                 <div class="field"><label>WhatsApp Number</label><input id="qMobile" placeholder="Defaults from the Lead/Client — edit if needed"></div>
                 <div class="field" style="grid-column:1/-1"><label>Customer Address</label><textarea id="qAddress" rows="2"></textarea></div>
                 <div class="field"><label>Currency</label><select id="curSel" onchange="recalc()"></select></div>
@@ -244,7 +244,7 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="api.js?v=10"></script>
-<script src="app.js?v=10"></script>
+<script src="api.js?v=11"></script>
+<script src="app.js?v=11"></script>
 </body>
 </html>
