@@ -1080,9 +1080,13 @@ function renderRecentQuotes(quotes) {
     const tr = document.createElement("tr");
     tr.style.cursor = "pointer";
     tr.title = "Open " + q.quote_no;
+    const approvalTag = q.needs_approval
+      ? (q.approved ? '<span class="badge cli" style="margin-left:6px">✓ Approved</span>'
+                    : '<span class="badge warn" style="margin-left:6px">⏳ Pending Approval</span>')
+      : "";
     tr.innerHTML = "<td>" + q.quote_no + "</td><td>" + q.customer_name + '</td><td class="num">₹' +
       Math.round(q.grand_total).toLocaleString("en-IN") + '</td><td><span class="st ' + q.status + '">' +
-      q.status.charAt(0).toUpperCase() + q.status.slice(1) + "</span></td>";
+      q.status.charAt(0).toUpperCase() + q.status.slice(1) + "</span>" + approvalTag + "</td>";
     tr.onclick = () => openQuote(q.id);
     b.appendChild(tr);
   });
