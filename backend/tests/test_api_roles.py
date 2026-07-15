@@ -76,12 +76,25 @@ def test_sales_quote_view_hides_cost(client, sales_headers):
     assert not _has_confidential(r.json())
 
 
-def test_sales_blocked_by_discount_cap(client, sales_headers):
-    # 20% line discount exceeds the 12% hard cap -> sales cannot even create it.
-    r = client.post("/api/quotes", json=_new_quote_payload(line_disc=20.0),
-                    headers=sales_headers)
-    assert r.status_code == 422
-    assert "maximum" in r.json()["detail"].lower()
+def test_sales_exceeds_cap_saves_pending_approval(client, sales_headers, manager_headers):
+    # 20% line discount exceeds the 12% hard cap; sales can still save it, but it
+    # lands in Pending Approval instead of being rejected outright.
+    created = client.post("/api/quotes", json=_new_quote_payload(line_disc=20.0),
+                          headers=sales_headers).json()
+    assert created["status"] == "draft"
+    assert created["totals"]["needs_approval"] is True
+
+    # Sales still cannot send their own pending-approval quote.
+    r = client.patch(f"/api/quotes/{created['id']}/status",
+                     json={"status": "sent"}, headers=sales_headers)
+    assert r.status_code == 403
+
+    # Once a manager approves it (same quote id), sales can send it.
+    approve = client.patch(f"/api/quotes/{created['id']}/approve", headers=manager_headers)
+    assert approve.status_code == 200 and approve.json()["approved"] is True
+    r2 = client.patch(f"/api/quotes/{created['id']}/status",
+                      json={"status": "sent"}, headers=sales_headers)
+    assert r2.status_code == 200 and r2.json()["status"] == "sent"
 
 
 def test_manager_exceeds_cap_and_flags_approval(client, manager_headers):

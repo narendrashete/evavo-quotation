@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import re
 import secrets
@@ -172,14 +173,12 @@ def _resolve_addons(body: QuoteCreate, s: AppSettings) -> AddOns:
 
 
 def _prepare_quote_write(db: Session, body: QuoteCreate, user, s: AppSettings):
-    """Shared by create/update: hard discount cap check, then build lines + totals."""
-    # Hard discount cap: only manager/admin may exceed the configured maximum.
+    """Shared by create/update: build lines + totals, forcing approval instead of
+    hard-blocking when a non-manager/admin line exceeds the configured discount cap.
+    """
+    over_cap = False
     if not can_see_cost(user.role):
-        over = [li for li in body.lines if li.line_disc > s.max_discount_pct]
-        if over:
-            raise HTTPException(
-                422, f"Line discount exceeds the {s.max_discount_pct:g}% maximum. "
-                     "A manager or admin must approve a higher discount.")
+        over_cap = any(li.line_disc > s.max_discount_pct for li in body.lines)
     addons = _resolve_addons(body, s)
     lines = _build_lines(db, body, addons.gst_default_pct)
     _, totals = compute_quote(
@@ -187,6 +186,8 @@ def _prepare_quote_write(db: Session, body: QuoteCreate, user, s: AppSettings):
          for l in lines],
         addons,
     )
+    if over_cap:
+        totals = dataclasses.replace(totals, needs_approval=True)
     return lines, totals, addons
 
 

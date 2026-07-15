@@ -419,15 +419,12 @@ function renderItems() {
 }
 function upd(idx, field, val) {
   let v = parseFloat(val) || 0;
-  // Hard discount cap: sales cannot exceed the configured maximum.
-  let clamped = false;
+  // Above-cap discounts are allowed for sales now — they just route the quote
+  // to Pending Approval on save instead of being rejected.
   if (field === "disc" && !canSeeCost && v > SETTINGS.max_discount_pct) {
-    v = SETTINGS.max_discount_pct;
-    clamped = true;
-    toast("Max discount is " + SETTINGS.max_discount_pct + "%. A manager can approve more.", true);
+    toast("Discount exceeds the " + SETTINGS.max_discount_pct + "% policy — this quote will need manager approval to send.");
   }
   LINES[idx][field] = v;
-  if (clamped) renderItems();
   recalc();
 }
 
@@ -492,7 +489,7 @@ function recalc() {
     $("mPct").textContent = (sub > 0 ? (totMargin / sub * 100) : 0).toFixed(1) + "%";
   }
   const overallDisc = gross > 0 ? (discGiven / gross * 100) : 0;
-  const anyHigh = LINES.some((l) => l.disc > 15);
+  const anyHigh = LINES.some((l) => l.disc > 15 || (!canSeeCost && l.disc > SETTINGS.max_discount_pct));
   $("approvalBox").classList.toggle("hide", !(overallDisc > 12 || anyHigh));
   window._Q = { sub, install, pack, freight, grand, taxable, gstTotal,
                 cgst, sgst, igst, intra, finalPayable };
