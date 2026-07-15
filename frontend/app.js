@@ -248,6 +248,7 @@ function newQuote() {
   LINES = []; currentQuoteId = null; currentQuoteStatus = null; lastPreview = null; selectedClientId = null;
   $("builderSub").textContent = "New draft";
   $("qLead").value = ""; $("qAddress").value = ""; $("qLeadInfo").textContent = "";
+  $("qCustomer").value = ""; $("qEmail").value = ""; $("qMobile").value = "";
   $("aInstall").checked = true; $("aInstallAmt").value = ""; $("aPack").value = 0;
   if ($("qPos")) $("qPos").value = SETTINGS.home_state || "27";
   applyBuilderDefaults();
@@ -1126,7 +1127,7 @@ function renderKanban(leads) {
     items.forEach((l) => {
       const c = document.createElement("div"); c.className = "kcard";
       c.innerHTML = "<b>" + l.name + '</b><div class="meta"><span>Owner: ' + (l.owner || "—") + '</span></div><div class="amt">₹ ' + (l.amount || 0).toLocaleString("en-IN") + "</div>";
-      c.onclick = () => newQuote();
+      c.onclick = () => { newQuote(); $("qLead").value = l.id; onLeadSelected(); };
       col.appendChild(c);
     });
     k.appendChild(col);
