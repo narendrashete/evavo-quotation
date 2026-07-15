@@ -19,7 +19,7 @@ from app.core.serialize import quote_out, client_preview_out, product_engine_pri
 from app.core.pricing import compute_quote, QuoteLineInput, AddOns
 from app.models import Quote, QuoteLine, Product, FxRate, TermsTemplate, EmailSetup, AppSettings
 from app.schemas import QuoteCreate, QuoteStatusUpdate
-from app.services.pdf import build_quote_pdf
+from app.services.pdf import build_quote_pdf, build_quote_summary_pdf
 from app.services.email import send_quote_email
 
 router = APIRouter(prefix="/api/quotes", tags=["quotes"])
@@ -46,7 +46,7 @@ def _terms_body(db: Session, quote: Quote) -> str:
 
 
 def _render_pdf(db: Session, quote: Quote) -> bytes:
-    preview = client_preview_out(quote)
+    preview = client_preview_out(quote, db=db)
     return build_quote_pdf(
         preview, currency=quote.currency,
         rate_to_inr=_display_rate(db, quote.currency),
@@ -56,9 +56,28 @@ def _render_pdf(db: Session, quote: Quote) -> bytes:
     )
 
 
-def _share_link(quote: Quote, request: Request) -> str:
+def _render_summary_pdf(db: Session, quote: Quote) -> bytes:
+    preview = client_preview_out(quote)
+    return build_quote_summary_pdf(
+        preview, currency=quote.currency,
+        rate_to_inr=_display_rate(db, quote.currency),
+        terms_body=_terms_body(db, quote),
+        bill_to_name=quote.customer_name, bill_to_email=quote.customer_email or "",
+        bill_to_address=quote.customer_address or "",
+    )
+
+
+def _share_base(quote: Quote, request: Request) -> str:
     base = settings.app_public_url.rstrip("/") if settings.app_public_url else str(request.base_url).rstrip("/")
-    return f"{base}/api/quotes/share/{quote.share_token}/pdf"
+    return f"{base}/api/quotes/share/{quote.share_token}"
+
+
+def _share_link_detail(quote: Quote, request: Request) -> str:
+    return f"{_share_base(quote, request)}/pdf"
+
+
+def _share_link_summary(quote: Quote, request: Request) -> str:
+    return f"{_share_base(quote, request)}/summary"
 
 
 def _quote_message(quote: Quote, request: Request) -> str:
@@ -66,8 +85,9 @@ def _quote_message(quote: Quote, request: Request) -> str:
         f"Dear {quote.customer_name},\n\n"
         f"Please find your quotation {quote.quote_no} "
         f"({quote.created_at.strftime('%d %b %Y')}).\n\n"
-        f"Grand Total: {quote.currency} {quote.grand_total:,.2f}\n\n"
-        f"View/download: {_share_link(quote, request)}\n\n"
+        f"Final Payable: {quote.currency} {quote.final_payable:,.2f}\n\n"
+        f"Summary quotation: {_share_link_summary(quote, request)}\n"
+        f"Detailed quotation (with product images): {_share_link_detail(quote, request)}\n\n"
         f"For queries or to proceed, reply to this message.\n\n"
         f"Regards,\nEvavo Wellness & Solutions LLP"
     )
@@ -243,12 +263,26 @@ def set_status(quote_id: int, body: QuoteStatusUpdate,
 @router.get("/{quote_id}/pdf")
 def quote_pdf(quote_id: int, db: Session = Depends(get_session),
               user=Depends(get_current_user)):
-    """Branded, client-safe PDF (no cost — built from the preview payload)."""
+    """Branded, client-safe Detailed PDF, with product photos (no cost —
+    built from the preview payload)."""
     q = db.get(Quote, quote_id)
     if not q:
         raise HTTPException(404, "Quote not found")
     pdf = _render_pdf(db, q)
     fname = q.quote_no.replace("/", "_") + ".pdf"
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{fname}"'})
+
+
+@router.get("/{quote_id}/pdf/summary")
+def quote_pdf_summary(quote_id: int, db: Session = Depends(get_session),
+                      user=Depends(get_current_user)):
+    """Branded, client-safe Summary PDF — condensed line items, no photos."""
+    q = db.get(Quote, quote_id)
+    if not q:
+        raise HTTPException(404, "Quote not found")
+    pdf = _render_summary_pdf(db, q)
+    fname = q.quote_no.replace("/", "_") + "_summary.pdf"
     return Response(content=pdf, media_type="application/pdf",
                     headers={"Content-Disposition": f'inline; filename="{fname}"'})
 
@@ -303,7 +337,7 @@ def quote_whatsapp(quote_id: int, request: Request, db: Session = Depends(get_se
 
 @router.get("/share/{token}/pdf")
 def quote_share_pdf(token: str, db: Session = Depends(get_session)):
-    """Public, unauthenticated, client-safe PDF — no login required.
+    """Public, unauthenticated, client-safe Detailed PDF — no login required.
 
     Looked up by an unguessable share token, not the quote id. Always built
     from the client-preview payload, so cost/margin can never appear here.
@@ -313,6 +347,21 @@ def quote_share_pdf(token: str, db: Session = Depends(get_session)):
         raise HTTPException(404, "Quote not found")
     pdf = _render_pdf(db, q)
     fname = q.quote_no.replace("/", "_") + ".pdf"
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{fname}"'})
+
+
+@router.get("/share/{token}/summary")
+def quote_share_summary(token: str, db: Session = Depends(get_session)):
+    """Public, unauthenticated, client-safe Summary PDF — no login required.
+
+    Same share token as the Detailed PDF (one link per quote, two views).
+    """
+    q = db.execute(select(Quote).where(Quote.share_token == token)).scalars().first()
+    if not q:
+        raise HTTPException(404, "Quote not found")
+    pdf = _render_summary_pdf(db, q)
+    fname = q.quote_no.replace("/", "_") + "_summary.pdf"
     return Response(content=pdf, media_type="application/pdf",
                     headers={"Content-Disposition": f'inline; filename="{fname}"'})
 

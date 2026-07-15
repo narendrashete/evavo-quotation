@@ -7,9 +7,16 @@ fields are structurally impossible to emit there.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+from sqlalchemy import select
+
 from app.core.pricing import (
     PricingInputs, MarkupBase, compute_unit, compute_quote, QuoteLineInput, AddOns,
 )
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 
 def product_engine_price(product) -> tuple[float, float]:
@@ -55,14 +62,28 @@ def product_out(product, include_cost: bool) -> dict:
     return out
 
 
-def quote_out(quote, include_cost: bool) -> dict:
+def quote_out(quote, include_cost: bool, db: "Session | None" = None) -> dict:
     """Serialize a stored quote, recomputing totals from line snapshots.
 
     Add-on and GST parameters come from the quote's snapshot columns, so the
     recomputed totals reproduce exactly what was saved. Tax fields (HSN, GST,
     CGST/SGST/IGST, taxable/final payable) are client-safe — emitted for every
     role; only cost/margin stay behind `include_cost`.
+
+    `db`, if given, is used to batch-fetch each line's current `Product.image`
+    (not snapshotted on `QuoteLine`) for callers that need it, e.g. PDF
+    rendering. Omitted by default so existing JSON callers are unaffected.
     """
+    images_by_product: dict[int, str | None] = {}
+    if db is not None:
+        from app.models import Product  # local import: avoid a serialize<->models cycle
+        product_ids = {l.product_id for l in quote.lines if l.product_id is not None}
+        if product_ids:
+            rows = db.execute(
+                select(Product.id, Product.image).where(Product.id.in_(product_ids))
+            ).all()
+            images_by_product = {pid: image for pid, image in rows}
+
     line_inputs = [
         QuoteLineInput(unit_price=l.unit_price, final_c2e=l.unit_cost,
                        qty=l.qty, line_disc=l.line_disc, gst_pct=l.gst_pct)
@@ -85,6 +106,7 @@ def quote_out(quote, include_cost: bool) -> dict:
             "hsn_code": l.hsn_code, "gst_pct": r.gst_pct,
             "gst_amount": round(r.gst_amount, 2),
             "unit_price": round(l.unit_price, 2), "line_net": round(r.line_net, 2),
+            "image": images_by_product.get(l.product_id),
         }
         if include_cost:
             item["unit_cost"] = round(l.unit_cost, 2)        # CONFIDENTIAL
@@ -127,6 +149,6 @@ def quote_out(quote, include_cost: bool) -> dict:
     return out
 
 
-def client_preview_out(quote) -> dict:
+def client_preview_out(quote, db: "Session | None" = None) -> dict:
     """Client-safe payload — selling prices only, cost structurally excluded."""
-    return quote_out(quote, include_cost=False)
+    return quote_out(quote, include_cost=False, db=db)
