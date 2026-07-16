@@ -75,21 +75,39 @@ def seed(db: Session) -> None:
                         client_id=project.client_id if project else None))
 
     if not db.execute(select(TermsTemplate)).first():
+        # Bodies use the "# Heading" convention: each `# X` line becomes a bold
+        # section headline on the Proposal PDF's Terms page, the lines under it
+        # its body. See app/services/pdf.py:_parse_terms_sections.
         db.add(TermsTemplate(
             name="Currency / International", kind="currency",
-            body=("1. Quotation valid for two weeks from date of issue.\n"
-                  "2. Prices quoted are Ex-Works; freight & import charges extra at actuals.\n"
-                  "3. Payment terms: 100% advance; order confirmed on receipt.\n"
-                  "4. Installation charges 10.5% of equipment value.\n"
-                  "5. Civil, plumbing, piping & electrical works are in the client's scope.\n"
-                  "6. Lead time: 8-12 weeks for production & delivery.")))
+            body=("# Price\n"
+                  "Price quoted is Ex-Works. Excludes all taxes and local levies (GST 18%).\n"
+                  "# Validity\n"
+                  "Quote valid for TWO weeks from date of issue.\n"
+                  "# Freight\n"
+                  "International import freight, GST and local freight charges extra at actuals.\n"
+                  "# Payment Terms\n"
+                  "100% advance. Order once placed cannot be cancelled and advance is "
+                  "non-refundable. Payment via NEFT/RTGS.\n"
+                  "# Other Duties & Charges\n"
+                  "1) Installation charges are 10.5% of the total price. 2) Lodging, boarding, "
+                  "travel and food allowance for installation outside Mumbai to be borne by the "
+                  "client. 3) Any special/fragile packaging (upholstery, ceramic/glass, wooden) "
+                  "will cost extra. 4) Lead time 12-16 weeks. 5) Civil, plumbing, piping & "
+                  "electrical works are in the client's scope.")))
         db.add(TermsTemplate(
             name="Regular (Domestic)", kind="regular",
-            body=("1. Quotation valid for two weeks.\n"
-                  "2. Prices are Ex-Works; freight extra at actuals.\n"
-                  "3. Payment: 100% advance.\n"
-                  "4. Installation 10.5% of equipment value.\n"
-                  "5. Lead time: 8-12 weeks.")))
+            body=("# Price\n"
+                  "Prices are Ex-Works. Excludes all taxes (GST 18%).\n"
+                  "# Validity\n"
+                  "Quote valid for TWO weeks from date of issue.\n"
+                  "# Freight\n"
+                  "Freight charges extra at actuals.\n"
+                  "# Payment Terms\n"
+                  "100% advance; order confirmed on receipt. Payment via NEFT/RTGS.\n"
+                  "# Other Duties & Charges\n"
+                  "1) Installation charges are 10.5% of equipment value. 2) Lead time 8-12 "
+                  "weeks for production & delivery.")))
 
     if not db.execute(select(AppSettings)).first():
         db.add(AppSettings())  # all defaults (12% cap, 18% GST, 10.5% install, home state 27)

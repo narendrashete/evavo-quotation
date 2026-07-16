@@ -1,4 +1,10 @@
-"""Branded, client-safe quote PDFs — Detailed (with product photos) and Summary.
+"""Branded, client-safe quote PDFs.
+
+Two documents: the **Detailed** quote is a multi-page *Proposal* — a cover page
+(logo + spa hero image + "Proposal for" block + address footer), box-bordered
+body page(s) with the full line-item table + totals and no footer, then a Terms
+& Conditions page with dynamic `# Heading` sections. The **Summary** quote keeps
+the compact single-page legacy layout (name + qty + amount).
 
 CRITICAL: these builders receive only the cost-free client-preview payload
 (`serialize.client_preview_out`) plus display data — no access to cost or
@@ -25,6 +31,14 @@ HEADBG = (243, 248, 252)
 COMPANY = "Evavo Wellness & Solutions LLP"
 TAGLINE = "Spa Consulting - Spa & Salon Equipment"
 
+# Company footer details for the Proposal cover / terms pages, verbatim from the
+# client's letterhead. If these ever need to be admin-editable, move them into
+# AppSettings — for now they're fixed, like COMPANY above.
+ADDRESS = "Shop N.5, Opp Lady Ratan Tower, Gandhi Nagar, Worli, Mumbai 400018 MAHARASHTRA"
+PHONE = "022 6660 6636 / 35"
+EMAIL = "info@evavo.com"
+WEB = "www.evavo.com"
+
 # `Product.image` is stored as a relative path like "/static/product_images/x.jpg"
 # (served by the StaticFiles mount in main.py), not an absolute URL — resolve it
 # to a real file on disk rather than fetching over HTTP.
@@ -36,6 +50,16 @@ def _resolve_image_path(image: str | None) -> str | None:
         return None
     rel = image[len("/static/"):] if image.startswith("/static/") else image.lstrip("/")
     path = os.path.join(_STATIC_DIR, rel)
+    return path if os.path.isfile(path) else None
+
+
+def _brand_path(name: str) -> str | None:
+    """Resolve a swappable branding asset under static/branding/ (logo, cover).
+
+    Returns None if the file is absent so the proposal still renders (just
+    without that image) when an admin removes or renames it.
+    """
+    path = os.path.join(_STATIC_DIR, "branding", name)
     return path if os.path.isfile(path) else None
 
 
@@ -172,38 +196,179 @@ def _new_pdf() -> tuple[FPDF, float]:
     return pdf, pdf.w - 20
 
 
-def build_quote_pdf(preview: dict, *, currency: str = "INR",
-                    rate_to_inr: float = 1.0, terms_body: str = "",
-                    quote_date: str | None = None,
-                    bill_to_name: str = "", bill_to_email: str = "",
-                    bill_to_address: str = "") -> bytes:
-    """Detailed quote: full line items with HSN/GST columns and a product
-    photo per row. `preview` is the dict from serialize.client_preview_out
-    (no cost fields)."""
-    pdf, W = _new_pdf()
-    address_lines = _draw_header_and_billto(
-        pdf, preview, currency=currency, quote_date=quote_date,
-        bill_to_name=bill_to_name, bill_to_email=bill_to_email,
-        bill_to_address=bill_to_address)
+# --- Proposal (Detailed) document --------------------------------------------
 
-    # --- Line items table (image + HSN + GST columns) ---
-    pdf.set_xy(10, 66 + 5 * address_lines)
+_PROP_MARGIN = 12       # left/right text margin on body/terms pages
+_BORDER_INSET = 7       # box-border inset from the page edge
+
+
+def _parse_terms_sections(body: str) -> list[tuple[str, str]]:
+    """Split a terms body into (heading, text) sections.
+
+    Convention: a line beginning with "# " opens a new section whose heading is
+    the text after the hash; following lines accumulate as that section's body
+    until the next heading. Text before the first heading becomes a leading
+    section with an empty heading. A body with no "# " renders as one block, so
+    legacy plain templates still print correctly.
+    """
+    sections: list[tuple[str, list[str]]] = []
+    for raw in (body or "").splitlines():
+        if raw.lstrip().startswith("# "):
+            sections.append((raw.lstrip()[2:].strip(), []))
+        else:
+            if not sections:
+                sections.append(("", []))
+            sections[-1][1].append(raw)
+    out: list[tuple[str, str]] = []
+    for heading, lines in sections:
+        text = "\n".join(lines).strip("\n")
+        if heading or text.strip():
+            out.append((heading, text))
+    return out
+
+
+class ProposalPDF(FPDF):
+    """Multi-part proposal: a cover page, box-bordered body pages (line items +
+    totals) with no footer, and a terms page — logo + address footer on the
+    cover/terms pages only.
+
+    `header()`/`footer()` fire automatically on every page (including on
+    auto-page-break overflow), so the box border, top-left logo and footer are
+    re-applied without the callers tracking pages. The page's mode is promoted
+    from `_pending_mode` inside `header()` so that the *previous* page's
+    `footer()` — which fpdf runs at the start of the next `add_page()` — still
+    sees the previous page's mode.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(unit="mm", format="A4")
+        self.mode = "cover"
+        self._pending_mode: str | None = "cover"
+        self.set_auto_page_break(auto=True, margin=22)
+        self.set_left_margin(_PROP_MARGIN)
+        self.set_right_margin(_PROP_MARGIN)
+        self.set_top_margin(38)  # body overflow rows resume below the logo
+
+    def add_mode_page(self, mode: str) -> None:
+        self._pending_mode = mode
+        self.add_page()
+
+    def _draw_logo(self, x: float, y: float, w: float) -> None:
+        logo = _brand_path("logo.png")
+        if logo:
+            self.image(logo, x=x, y=y, w=w)  # h=0 keeps aspect ratio
+
+    def header(self) -> None:  # noqa: D401 - fpdf callback
+        if self._pending_mode is not None:
+            self.mode = self._pending_mode
+            self._pending_mode = None
+        if self.mode == "cover":
+            return
+        # box border around the whole page
+        self.set_draw_color(*NAVY)
+        self.set_line_width(0.4)
+        self.rect(_BORDER_INSET, _BORDER_INSET,
+                  self.w - 2 * _BORDER_INSET, self.h - 2 * _BORDER_INSET)
+        self.set_line_width(0.2)
+        self._draw_logo(_PROP_MARGIN, _BORDER_INSET + 4, 13)
+
+    def footer(self) -> None:  # noqa: D401 - fpdf callback
+        if self.mode == "body":
+            return  # in-between pages carry no footer, to save print space
+        y = self.h - 22
+        self.set_draw_color(*LINE)
+        self.set_line_width(0.2)
+        self.line(_PROP_MARGIN, y, self.w - _PROP_MARGIN, y)
+        self.set_xy(0, y + 2)
+        self.set_font("Helvetica", "", 8)
+        self.set_text_color(*MUTED)
+        self.cell(0, 4.5, ADDRESS, 0, 2, "C")
+        self.cell(0, 4.5, f"Phone: {PHONE}    Email: {EMAIL}    {WEB}", 0, 0, "C")
+
+
+def _draw_cover(pdf: ProposalPDF, preview: dict, *, quote_date: str | None,
+                bill_to_name: str) -> None:
+    """Proposal cover: centered logo, spa hero image, 'Proposal for' block and
+    (via the page footer) the company address/contact."""
+    W = pdf.w
+    # centered logo near the top
+    logo = _brand_path("logo.png")
+    logo_w = 20
+    if logo:
+        pdf.image(logo, x=(W - logo_w) / 2, y=14, w=logo_w)
+
+    # spa hero image, full content width (aspect preserved by fpdf)
+    cover = _brand_path("cover.jpg")
+    img_w = W - 2 * 18
+    img_y = 48
+    if cover:
+        pdf.image(cover, x=18, y=img_y, w=img_w)
+        img_h = img_w * 466 / 700  # extracted cover is 700x466
+    else:
+        img_h = 0
+
+    y = img_y + img_h + 22
+    pdf.set_xy(0, y)
+    pdf.set_font("Helvetica", "", 12)
+    pdf.set_text_color(*MUTED)
+    pdf.cell(0, 8, "Proposal for:", 0, 2, "C")
+    pdf.set_font("Helvetica", "B", 18)
+    pdf.set_text_color(*NAVY)
+    pdf.cell(0, 11, bill_to_name or preview.get("customer_name", ""), 0, 2, "C")
+    pdf.ln(10)
+    pdf.set_font("Helvetica", "", 11)
+    pdf.set_text_color(70, 88, 106)
+    pdf.cell(0, 7, f"Prepared by {COMPANY}", 0, 2, "C")
+    pdf.set_font("Helvetica", "", 9.5)
+    pdf.set_text_color(*MUTED)
+    pdf.cell(0, 6, f"Date: {quote_date or date.today().strftime('%d-%b-%Y')}", 0, 2, "C")
+
+
+_TABLE_TOP = 30          # table start y on each body page (just below the logo)
+_ROW_H = 18
+
+
+def _draw_line_items(pdf: ProposalPDF, preview: dict, *, rate_to_inr: float,
+                     currency: str) -> None:
+    """Line-item table (image + HSN + GST columns) on the box-bordered body
+    pages. Starts below the top-left logo; overflows to further body pages.
+
+    Auto page-break is turned off here and rows are paginated manually: fpdf's
+    mid-cell auto break would invalidate the per-row `y0` bookkeeping (the image
+    and item text are positioned by absolute y), so instead we start a fresh
+    body page whenever the next row/totals block would cross the bottom margin.
+    """
+    W = pdf.w - 2 * _PROP_MARGIN
     cols = [(10, "#", "C"), (W - 10 - 22 - 34 - 14 - 16 - 34, "ITEM", "L"),
             (22, "HSN", "L"), (34, "UNIT PRICE", "R"), (14, "QTY", "R"),
             (16, "GST%", "R"), (34, "AMOUNT", "R")]
-    pdf.set_fill_color(*HEADBG)
-    pdf.set_text_color(*MUTED)
-    pdf.set_font("Helvetica", "B", 8)
-    for w, label, align in cols:
-        pdf.cell(w, 8, label, 0, 0, align, True)
-    pdf.ln(8)
+    bottom = pdf.h - 22
 
-    ROW_H = 18
+    def draw_col_header() -> None:
+        pdf.set_xy(_PROP_MARGIN, _TABLE_TOP)
+        pdf.set_fill_color(*HEADBG)
+        pdf.set_text_color(*MUTED)
+        pdf.set_font("Helvetica", "B", 8)
+        for w, label, align in cols:
+            pdf.cell(w, 8, label, 0, 0, align, True)
+        pdf.ln(8)
+
+    pdf.set_auto_page_break(False)
+    draw_col_header()
+
+    ROW_H = _ROW_H
     IMG_SIZE = 14
     PAD = 1.5
     pdf.set_text_color(*NAVY)
     pdf.set_draw_color(*LINE)
     for i, ln in enumerate(preview.get("lines", []), start=1):
+        if pdf.get_y() + ROW_H > bottom:
+            pdf.add_mode_page("body")
+            draw_col_header()
+        # reset per row: draw_col_header leaves MUTED text, and header() (on a
+        # new body page) leaves the draw color NAVY from the box border.
+        pdf.set_text_color(*NAVY)
+        pdf.set_draw_color(*LINE)
         y0 = pdf.get_y()
         pdf.set_font("Helvetica", "", 9)
         pdf.cell(cols[0][0], ROW_H, str(i), "B", 0, "C")
@@ -231,11 +396,61 @@ def build_quote_pdf(preview: dict, *, currency: str = "INR",
         pdf.set_xy(text_x, y0 + PAD)
         pdf.set_font("Helvetica", "", 9)
         pdf.set_text_color(*NAVY)
-        pdf.multi_cell(text_w, 4.2, _item_text(ln, max_len=46))
-        pdf.set_xy(10, y0 + ROW_H)
+        pdf.multi_cell(text_w, 4.2, _item_text(ln, max_len=46), 0, "L")
+        pdf.set_xy(_PROP_MARGIN, y0 + ROW_H)
 
+    # keep the whole totals block together — new body page if it won't fit
+    if pdf.get_y() + 65 > bottom:
+        pdf.add_mode_page("body")
+        pdf.set_xy(_PROP_MARGIN, _TABLE_TOP)
     _draw_totals(pdf, preview, rate_to_inr=rate_to_inr, currency=currency)
-    _draw_terms(pdf, terms_body)
+    pdf.set_auto_page_break(True, margin=22)
+
+
+def _draw_terms_page(pdf: ProposalPDF, terms_body: str) -> None:
+    """Terms & Conditions page: centered title, then each `# Heading` section as
+    a bold + underlined headline over its body (matching the reference)."""
+    sections = _parse_terms_sections(terms_body)
+    pdf.set_xy(_PROP_MARGIN, 28)
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.set_text_color(*NAVY)
+    pdf.cell(0, 8, "Terms And Conditions", 0, 1, "C")
+    pdf.ln(4)
+    for heading, text in sections:
+        if heading:
+            pdf.set_x(_PROP_MARGIN)
+            pdf.set_font("Helvetica", "BU", 9.5)
+            pdf.set_text_color(*NAVY)
+            pdf.cell(0, 6, heading, 0, 1, "L")
+        if text.strip():
+            pdf.set_x(_PROP_MARGIN)
+            pdf.set_font("Helvetica", "", 8.5)
+            pdf.set_text_color(91, 107, 123)
+            pdf.multi_cell(pdf.w - 2 * _PROP_MARGIN, 4.6, text, 0, "L")
+        pdf.ln(3)
+
+
+def build_quote_pdf(preview: dict, *, currency: str = "INR",
+                    rate_to_inr: float = 1.0, terms_body: str = "",
+                    quote_date: str | None = None,
+                    bill_to_name: str = "", bill_to_email: str = "",
+                    bill_to_address: str = "") -> bytes:
+    """Detailed quote as a branded Proposal: a cover page, box-bordered body
+    page(s) with the full line-item table + totals, and a Terms & Conditions
+    page. `preview` is the dict from serialize.client_preview_out (no cost
+    fields). `bill_to_email`/`bill_to_address` are accepted for signature
+    compatibility with the Summary builder but not printed on the cover."""
+    pdf = ProposalPDF()
+
+    pdf.add_mode_page("cover")
+    _draw_cover(pdf, preview, quote_date=quote_date, bill_to_name=bill_to_name)
+
+    pdf.add_mode_page("body")
+    _draw_line_items(pdf, preview, rate_to_inr=rate_to_inr, currency=currency)
+
+    if _parse_terms_sections(terms_body):
+        pdf.add_mode_page("terms")
+        _draw_terms_page(pdf, terms_body)
 
     out = pdf.output(dest="S")
     return out.encode("latin-1") if isinstance(out, str) else bytes(out)

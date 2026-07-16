@@ -39,11 +39,20 @@ def _display_rate(db: Session, currency: str) -> float:
     return r.rate_to_inr if r else 1.0
 
 
-def _terms_body(db: Session, quote: Quote) -> str:
+def _terms_body(db: Session, quote: Quote, *, append_company: bool = True) -> str:
     if not quote.terms_template_id:
         return ""
     t = db.get(TermsTemplate, quote.terms_template_id)
-    return (t.body + "\n\nEvavo Wellness & Solutions LLP") if t else ""
+    if not t:
+        return ""
+    # The legacy Summary PDF footer expects the company name appended to the
+    # body; the Proposal's own address footer already carries it, so callers
+    # for the Proposal pass append_company=False.
+    return t.body + "\n\nEvavo Wellness & Solutions LLP" if append_company else t.body
+
+
+def _quote_date(quote: Quote) -> str:
+    return (quote.created_at or datetime.utcnow()).strftime("%d-%b-%Y")
 
 
 def _render_pdf(db: Session, quote: Quote) -> bytes:
@@ -51,7 +60,8 @@ def _render_pdf(db: Session, quote: Quote) -> bytes:
     return build_quote_pdf(
         preview, currency=quote.currency,
         rate_to_inr=_display_rate(db, quote.currency),
-        terms_body=_terms_body(db, quote),
+        terms_body=_terms_body(db, quote, append_company=False),
+        quote_date=_quote_date(quote),
         bill_to_name=quote.customer_name, bill_to_email=quote.customer_email or "",
         bill_to_address=quote.customer_address or "",
     )
