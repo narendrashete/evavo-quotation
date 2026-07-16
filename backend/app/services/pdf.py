@@ -200,6 +200,11 @@ def _new_pdf() -> tuple[FPDF, float]:
 
 _PROP_MARGIN = 12       # left/right text margin on body/terms pages
 _BORDER_INSET = 7       # box-border inset from the page edge
+_LOGO_W = 13             # top-left logo width on body/terms pages
+_LOGO_ASPECT = 113 / 78  # extracted logo.png's natural h/w — used only to
+                        # estimate chrome layout spacing if it's ever swapped
+                        # for an image with a different aspect, the running
+                        # header just gets a little tighter/looser, not broken
 
 
 def _parse_terms_sections(body: str) -> list[tuple[str, str]]:
@@ -238,6 +243,13 @@ class ProposalPDF(FPDF):
     from `_pending_mode` inside `header()` so that the *previous* page's
     `footer()` — which fpdf runs at the start of the next `add_page()` — still
     sees the previous page's mode.
+
+    Every page after the cover also carries the Quotation No/Date and Bill To
+    name/contact as running "chrome": the full two-block layout on the first
+    body page (page 2 — the one right after the cover), and a compact
+    one-line version on every page after that (further body pages plus the
+    Terms page), to save vertical space. `set_info()` must be called before
+    any page is added, since `header()` reads it while drawing page 2+.
     """
 
     def __init__(self) -> None:
@@ -248,15 +260,76 @@ class ProposalPDF(FPDF):
         self.set_left_margin(_PROP_MARGIN)
         self.set_right_margin(_PROP_MARGIN)
         self.set_top_margin(38)  # body overflow rows resume below the logo
+        self.alias_nb_pages()   # "{nb}" -> total page count, resolved at output()
+        self._content_top = 30.0  # overwritten by header() before any content draws
+        self._quote_no = self._quote_date = self._bill_to_name = self._bill_to_contact = ""
 
     def add_mode_page(self, mode: str) -> None:
         self._pending_mode = mode
         self.add_page()
 
+    def set_info(self, *, quote_no: str, quote_date: str,
+                bill_to_name: str, bill_to_contact: str) -> None:
+        """Quotation No/Date + Bill To name/contact for the running chrome
+        drawn on every page after the cover. Call before add_mode_page("cover")."""
+        self._quote_no = quote_no
+        self._quote_date = quote_date
+        self._bill_to_name = bill_to_name
+        self._bill_to_contact = bill_to_contact  # email/mobile, already joined
+
     def _draw_logo(self, x: float, y: float, w: float) -> None:
         logo = _brand_path("logo.png")
         if logo:
             self.image(logo, x=x, y=y, w=w)  # h=0 keeps aspect ratio
+
+    def _draw_chrome_full(self) -> None:
+        """Full Quotation + Bill To block — first body page (page 2) only."""
+        x = self.w - 90
+        w = self.w - _PROP_MARGIN - x
+        y = _BORDER_INSET + 4
+        self.set_xy(x, y)
+        self.set_font("Helvetica", "B", 11)
+        self.set_text_color(*NAVY)
+        self.cell(w, 6, "QUOTATION", 0, 2, "R")
+        self.set_font("Helvetica", "", 8.5)
+        self.set_text_color(*MUTED)
+        self.cell(w, 5, f"No: {self._quote_no}", 0, 2, "R")
+        self.cell(w, 5, f"Date: {self._quote_date}", 0, 2, "R")
+        self.cell(w, 5, "Valid: 2 weeks", 0, 0, "R")
+
+        logo_bottom = _BORDER_INSET + 4 + _LOGO_W * _LOGO_ASPECT
+        meta_bottom = y + 6 + 5 + 5 + 5
+        y2 = max(logo_bottom, meta_bottom) + 4
+        self.set_xy(_PROP_MARGIN, y2)
+        self.set_font("Helvetica", "B", 8)
+        self.set_text_color(*MUTED)
+        self.cell(0, 5, "BILL TO", 0, 1, "L")
+        self.set_x(_PROP_MARGIN)
+        self.set_font("Helvetica", "B", 11)
+        self.set_text_color(*NAVY)
+        self.cell(0, 6, self._bill_to_name, 0, 1, "L")
+        if self._bill_to_contact:
+            self.set_x(_PROP_MARGIN)
+            self.set_font("Helvetica", "", 9)
+            self.set_text_color(70, 88, 106)
+            self.cell(0, 5, self._bill_to_contact, 0, 1, "L")
+        self._content_top = self.get_y() + 6
+
+    def _draw_chrome_compact(self) -> None:
+        """One-line Quotation/Bill To/Date summary — every page after page 2."""
+        logo_bottom = _BORDER_INSET + 4 + _LOGO_W * _LOGO_ASPECT
+        y = logo_bottom + 3
+        self.set_xy(_PROP_MARGIN, y)
+        self.set_font("Helvetica", "", 8)
+        self.set_text_color(*MUTED)
+        line = (f"Quotation No: {self._quote_no}    |    "
+                f"Bill To: {self._bill_to_name}    |    Date: {self._quote_date}")
+        self.cell(0, 5, line, 0, 1, "L")
+        self.set_draw_color(*LINE)
+        self.set_line_width(0.2)
+        yy = self.get_y() + 1
+        self.line(_PROP_MARGIN, yy, self.w - _PROP_MARGIN, yy)
+        self._content_top = yy + 5
 
     def header(self) -> None:  # noqa: D401 - fpdf callback
         if self._pending_mode is not None:
@@ -270,11 +343,22 @@ class ProposalPDF(FPDF):
         self.rect(_BORDER_INSET, _BORDER_INSET,
                   self.w - 2 * _BORDER_INSET, self.h - 2 * _BORDER_INSET)
         self.set_line_width(0.2)
-        self._draw_logo(_PROP_MARGIN, _BORDER_INSET + 4, 13)
+        self._draw_logo(_PROP_MARGIN, _BORDER_INSET + 4, _LOGO_W)
+        if self.mode == "body" and self.page_no() == 2:
+            self._draw_chrome_full()
+        else:
+            self._draw_chrome_compact()
+
+    def _draw_page_number(self) -> None:
+        self.set_font("Helvetica", "", 7.5)
+        self.set_text_color(*MUTED)
+        self.set_xy(0, self.h - 6)
+        self.cell(0, 5, f"Page {self.page_no()} of {{nb}}", 0, 0, "C")
 
     def footer(self) -> None:  # noqa: D401 - fpdf callback
+        self._draw_page_number()
         if self.mode == "body":
-            return  # in-between pages carry no footer, to save print space
+            return  # in-between pages carry no address footer, to save print space
         y = self.h - 22
         self.set_draw_color(*LINE)
         self.set_line_width(0.2)
@@ -324,7 +408,6 @@ def _draw_cover(pdf: ProposalPDF, preview: dict, *, quote_date: str | None,
     pdf.cell(0, 6, f"Date: {quote_date or date.today().strftime('%d-%b-%Y')}", 0, 2, "C")
 
 
-_TABLE_TOP = 30          # table start y on each body page (just below the logo)
 _ROW_H = 18
 
 
@@ -345,7 +428,7 @@ def _draw_line_items(pdf: ProposalPDF, preview: dict, *, rate_to_inr: float,
     bottom = pdf.h - 22
 
     def draw_col_header() -> None:
-        pdf.set_xy(_PROP_MARGIN, _TABLE_TOP)
+        pdf.set_xy(_PROP_MARGIN, pdf._content_top)
         pdf.set_fill_color(*HEADBG)
         pdf.set_text_color(*MUTED)
         pdf.set_font("Helvetica", "B", 8)
@@ -402,7 +485,7 @@ def _draw_line_items(pdf: ProposalPDF, preview: dict, *, rate_to_inr: float,
     # keep the whole totals block together — new body page if it won't fit
     if pdf.get_y() + 65 > bottom:
         pdf.add_mode_page("body")
-        pdf.set_xy(_PROP_MARGIN, _TABLE_TOP)
+        pdf.set_xy(_PROP_MARGIN, pdf._content_top)
     _draw_totals(pdf, preview, rate_to_inr=rate_to_inr, currency=currency)
     pdf.set_auto_page_break(True, margin=22)
 
@@ -411,7 +494,7 @@ def _draw_terms_page(pdf: ProposalPDF, terms_body: str) -> None:
     """Terms & Conditions page: centered title, then each `# Heading` section as
     a bold + underlined headline over its body (matching the reference)."""
     sections = _parse_terms_sections(terms_body)
-    pdf.set_xy(_PROP_MARGIN, 28)
+    pdf.set_xy(_PROP_MARGIN, pdf._content_top)
     pdf.set_font("Helvetica", "B", 13)
     pdf.set_text_color(*NAVY)
     pdf.cell(0, 8, "Terms And Conditions", 0, 1, "C")
@@ -441,6 +524,16 @@ def build_quote_pdf(preview: dict, *, currency: str = "INR",
     fields). `bill_to_email`/`bill_to_address` are accepted for signature
     compatibility with the Summary builder but not printed on the cover."""
     pdf = ProposalPDF()
+    qdate = quote_date or date.today().strftime("%d-%b-%Y")
+    contact = "  |  ".join(p for p in (
+        bill_to_email or preview.get("customer_email") or "",
+        preview.get("customer_mobile") or "",
+    ) if p)
+    pdf.set_info(
+        quote_no=preview.get("quote_no", "-"), quote_date=qdate,
+        bill_to_name=bill_to_name or preview.get("customer_name", ""),
+        bill_to_contact=contact,
+    )
 
     pdf.add_mode_page("cover")
     _draw_cover(pdf, preview, quote_date=quote_date, bill_to_name=bill_to_name)
