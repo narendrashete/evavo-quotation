@@ -26,7 +26,9 @@ NAVY = (11, 37, 69)
 RED = (226, 59, 46)
 MUTED = (106, 120, 136)
 LINE = (210, 220, 235)
-HEADBG = (243, 248, 252)
+HEADBG = (222, 233, 246)
+ZEBRA_BG = (241, 245, 250)   # totals-box alternate-row shading
+FINAL_BG = (224, 232, 243)   # totals-box "Final Payable" row highlight
 
 COMPANY = "Evavo Wellness & Solutions LLP"
 TAGLINE = "Spa Consulting - Spa & Salon Equipment"
@@ -143,31 +145,69 @@ def _draw_header_and_billto(pdf: FPDF, preview: dict, *, currency: str,
 
 
 def _draw_totals(pdf: FPDF, preview: dict, *, rate_to_inr: float, currency: str) -> None:
+    """Totals as a shaded, gridded box — an outer border + fill, a thin grid
+    line under each row, light zebra shading, and a highlighted Final Payable
+    band — so the numbers read as one unit instead of loose floating cells.
+    Shared by both the Detailed (Proposal) and Summary PDFs.
+    """
     t = preview.get("totals", {})
     pdf.ln(3)
-    tot_x = pdf.w - 10 - 75
 
-    def total_row(label, amount_inr, bold=False, big=False):
-        pdf.set_x(tot_x)
-        pdf.set_font("Helvetica", "B" if bold else "", 11 if big else 9)
-        pdf.set_text_color(*(NAVY if bold else (70, 88, 106)))
-        pdf.cell(45, 7 if not big else 9, label, 0, 0, "L")
-        pdf.cell(30, 7 if not big else 9, _money(amount_inr, rate_to_inr, currency),
-                 "T" if big else 0, 1, "R")
-
-    total_row("Subtotal", t.get("subtotal_net", 0))
-    total_row("Installation", t.get("installation", 0))
+    rows: list[tuple[str, float, bool]] = [
+        ("Subtotal", t.get("subtotal_net", 0), False),
+        ("Installation", t.get("installation", 0), False),
+    ]
     if preview.get("packaging"):
-        total_row("Packaging", preview.get("packaging", 0))
+        rows.append(("Packaging", preview.get("packaging", 0), False))
     if preview.get("freight"):
-        total_row("Freight & import", preview.get("freight", 0))
-    total_row("Taxable Amount", t.get("taxable_amount", 0))
+        rows.append(("Freight & import", preview.get("freight", 0), False))
+    rows.append(("Taxable Amount", t.get("taxable_amount", 0), False))
     if t.get("is_intra_state"):
-        total_row("CGST", t.get("cgst", 0))
-        total_row("SGST", t.get("sgst", 0))
+        rows.append(("CGST", t.get("cgst", 0), False))
+        rows.append(("SGST", t.get("sgst", 0), False))
     elif t.get("gst_total", 0):
-        total_row("IGST", t.get("igst", 0))
-    total_row("Final Payable", t.get("final_payable", 0), bold=True, big=True)
+        rows.append(("IGST", t.get("igst", 0), False))
+    rows.append(("Final Payable", t.get("final_payable", 0), True))
+
+    label_w, amt_w = 45, 30
+    pad = 3.5
+    row_h, final_h = 7.2, 9.5
+    tot_x = pdf.w - pdf.r_margin - (label_w + amt_w)
+    box_x = tot_x - pad
+    box_w = label_w + amt_w + pad * 2
+    box_y = pdf.get_y()
+    box_h = row_h * (len(rows) - 1) + final_h + pad * 2
+
+    pdf.set_fill_color(250, 252, 254)
+    pdf.set_draw_color(*LINE)
+    pdf.set_line_width(0.3)
+    pdf.rect(box_x, box_y, box_w, box_h, "DF")
+
+    y = box_y + pad
+    for i, (label, amount_inr, bold) in enumerate(rows):
+        is_final = i == len(rows) - 1
+        h = final_h if is_final else row_h
+        if is_final:
+            pdf.set_fill_color(*FINAL_BG)
+            pdf.rect(box_x, y, box_w, h, "F")
+            pdf.set_draw_color(*NAVY)
+            pdf.set_line_width(0.35)
+            pdf.line(box_x, y, box_x + box_w, y)
+        else:
+            if i % 2 == 1:
+                pdf.set_fill_color(*ZEBRA_BG)
+                pdf.rect(box_x, y, box_w, h, "F")
+            pdf.set_draw_color(*LINE)
+            pdf.set_line_width(0.15)
+            pdf.line(box_x, y + h, box_x + box_w, y + h)
+        pdf.set_xy(tot_x, y)
+        pdf.set_font("Helvetica", "B" if bold else "", 11 if is_final else 9)
+        pdf.set_text_color(*(NAVY if bold else (70, 88, 106)))
+        pdf.cell(label_w, h, label, 0, 0, "L")
+        pdf.cell(amt_w, h, _money(amount_inr, rate_to_inr, currency), 0, 0, "R")
+        y += h
+
+    pdf.set_xy(pdf.l_margin, box_y + box_h + 4)
 
 
 def _draw_terms(pdf: FPDF, terms_body: str) -> None:
@@ -262,20 +302,23 @@ class ProposalPDF(FPDF):
         self.set_top_margin(38)  # body overflow rows resume below the logo
         self.alias_nb_pages()   # "{nb}" -> total page count, resolved at output()
         self._content_top = 30.0  # overwritten by header() before any content draws
-        self._quote_no = self._quote_date = self._bill_to_name = self._bill_to_contact = ""
+        self._quote_no = self._quote_date = self._bill_to_name = ""
+        self._bill_to_email = self._bill_to_mobile = self._bill_to_address = ""
 
     def add_mode_page(self, mode: str) -> None:
         self._pending_mode = mode
         self.add_page()
 
-    def set_info(self, *, quote_no: str, quote_date: str,
-                bill_to_name: str, bill_to_contact: str) -> None:
-        """Quotation No/Date + Bill To name/contact for the running chrome
-        drawn on every page after the cover. Call before add_mode_page("cover")."""
+    def set_info(self, *, quote_no: str, quote_date: str, bill_to_name: str,
+                bill_to_email: str, bill_to_mobile: str, bill_to_address: str) -> None:
+        """Quotation No/Date + Bill To details for the running chrome drawn on
+        every page after the cover. Call before add_mode_page("cover")."""
         self._quote_no = quote_no
         self._quote_date = quote_date
         self._bill_to_name = bill_to_name
-        self._bill_to_contact = bill_to_contact  # email/mobile, already joined
+        self._bill_to_email = bill_to_email
+        self._bill_to_mobile = bill_to_mobile  # also the client's WhatsApp number
+        self._bill_to_address = bill_to_address
 
     def _draw_logo(self, x: float, y: float, w: float) -> None:
         logo = _brand_path("logo.png")
@@ -308,11 +351,21 @@ class ProposalPDF(FPDF):
         self.set_font("Helvetica", "B", 11)
         self.set_text_color(*NAVY)
         self.cell(0, 6, self._bill_to_name, 0, 1, "L")
-        if self._bill_to_contact:
+
+        self.set_font("Helvetica", "", 9)
+        self.set_text_color(70, 88, 106)
+        for ln in [l for l in (self._bill_to_address or "").splitlines() if l.strip()][:2]:
             self.set_x(_PROP_MARGIN)
-            self.set_font("Helvetica", "", 9)
-            self.set_text_color(70, 88, 106)
-            self.cell(0, 5, self._bill_to_contact, 0, 1, "L")
+            self.cell(0, 5, ln, 0, 1, "L")
+
+        contact_bits = []
+        if self._bill_to_email:
+            contact_bits.append(self._bill_to_email)
+        if self._bill_to_mobile:
+            contact_bits.append(f"WhatsApp: {self._bill_to_mobile}")
+        if contact_bits:
+            self.set_x(_PROP_MARGIN)
+            self.cell(0, 5, "   |   ".join(contact_bits), 0, 1, "L")
         self._content_top = self.get_y() + 6
 
     def _draw_chrome_compact(self) -> None:
@@ -483,7 +536,7 @@ def _draw_line_items(pdf: ProposalPDF, preview: dict, *, rate_to_inr: float,
         pdf.set_xy(_PROP_MARGIN, y0 + ROW_H)
 
     # keep the whole totals block together — new body page if it won't fit
-    if pdf.get_y() + 65 > bottom:
+    if pdf.get_y() + 72 > bottom:
         pdf.add_mode_page("body")
         pdf.set_xy(_PROP_MARGIN, pdf._content_top)
     _draw_totals(pdf, preview, rate_to_inr=rate_to_inr, currency=currency)
@@ -521,18 +574,16 @@ def build_quote_pdf(preview: dict, *, currency: str = "INR",
     """Detailed quote as a branded Proposal: a cover page, box-bordered body
     page(s) with the full line-item table + totals, and a Terms & Conditions
     page. `preview` is the dict from serialize.client_preview_out (no cost
-    fields). `bill_to_email`/`bill_to_address` are accepted for signature
-    compatibility with the Summary builder but not printed on the cover."""
+    fields). `bill_to_email`/`bill_to_address` are not printed on the cover,
+    but do appear in the Bill To block on page 2 (the first body page)."""
     pdf = ProposalPDF()
     qdate = quote_date or date.today().strftime("%d-%b-%Y")
-    contact = "  |  ".join(p for p in (
-        bill_to_email or preview.get("customer_email") or "",
-        preview.get("customer_mobile") or "",
-    ) if p)
     pdf.set_info(
         quote_no=preview.get("quote_no", "-"), quote_date=qdate,
         bill_to_name=bill_to_name or preview.get("customer_name", ""),
-        bill_to_contact=contact,
+        bill_to_email=bill_to_email or preview.get("customer_email") or "",
+        bill_to_mobile=preview.get("customer_mobile") or "",
+        bill_to_address=bill_to_address or preview.get("customer_address") or "",
     )
 
     pdf.add_mode_page("cover")
