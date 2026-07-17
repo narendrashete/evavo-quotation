@@ -34,7 +34,7 @@ input,select,textarea{font-family:inherit;font-size:14px}
 .page-head{display:flex;align-items:flex-end;justify-content:space-between;gap:14px;margin-bottom:18px;flex-wrap:wrap}
 .page-head h1{font-size:23px;color:var(--navy);letter-spacing:-.3px}
 .page-head p{color:var(--muted);font-size:13.5px;margin-top:3px}
-.btn{border:0;border-radius:10px;padding:11px 18px;font-weight:700;font-size:13.5px;display:inline-flex;align-items:center;gap:8px}
+.btn{border:0;border-radius:10px;padding:11px 18px;font-weight:700;font-size:13.5px;display:inline-flex;align-items:center;gap:8px;text-decoration:none;cursor:pointer}
 .btn.primary{background:linear-gradient(90deg,var(--blue-deep),var(--blue));color:#fff;box-shadow:0 10px 22px -12px var(--blue-deep)}
 .btn.ghost{background:#fff;border:1px solid var(--line);color:var(--navy)}
 .btn.teal{background:var(--teal);color:#fff}
