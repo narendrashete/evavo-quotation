@@ -7,6 +7,7 @@ the variable cost fields rather than fixed models.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -70,9 +71,14 @@ class QuoteCreate(BaseModel):
     currency: str = "INR"
     terms_template_id: Optional[int] = None
     install_enabled: bool = True
-    install_pct: float = 0.105
-    install_amount: Optional[float] = None      # flat charge override (else install_pct)
+    install_pct: float = 0.105                  # "Others" / uncategorised rate
+    install_dry_pct: Optional[float] = None     # blank -> settings default
+    install_wet_pct: Optional[float] = None
+    install_amount: Optional[float] = None      # flat charge override (else per-area %)
     packaging: float = 0.0
+    # Quote-level discount off the goods subtotal — either a % or a flat amount.
+    overall_disc_pct: float = 0.0
+    overall_disc_amount: Optional[float] = None
     # Freight/import breakdown (flat INR). `freight` kept for back-compat clients.
     freight: float = 0.0
     local_freight: Optional[float] = None
@@ -106,13 +112,17 @@ class ProjectIn(BaseModel):
 
 
 class LeadIn(BaseModel):
-    name: str
-    owner: Optional[str] = None
+    name: str                                   # contact person ("Client Name")
+    owner: Optional[str] = None                 # sales person / handled by
     stage: int = 0
+    # No longer entered in the Lead master; kept so existing rows keep their value.
     amount: float = 0.0
+    received_date: Optional[date] = None
+    email: Optional[str] = None
+    requirement: Optional[str] = None
     project_id: int
     address: Optional[str] = None
-    whatsapp_number: Optional[str] = None
+    whatsapp_number: Optional[str] = None       # mobile / WhatsApp number
 
 
 class TermsIn(BaseModel):
@@ -135,7 +145,8 @@ class ProductUpdate(BaseModel):
     name: Optional[str] = None
     model_no: Optional[str] = None
     category: Optional[str] = None
-    description: Optional[str] = None
+    area_category: Optional[str] = None     # Dry Area | Wet Area | Others
+    description: Optional[str] = None       # "Specification" in the UI
     hsn_code: Optional[str] = None
     gst_pct: Optional[float] = None
     source_price_inr: Optional[float] = None
@@ -148,7 +159,9 @@ class ProductUpdate(BaseModel):
 class AppSettingsIn(BaseModel):
     max_discount_pct: float = 12.0
     gst_default_pct: float = 18.0
-    install_pct: float = 0.105
+    install_pct: float = 0.105          # "Others" / uncategorised products
+    install_dry_pct: float = 0.105
+    install_wet_pct: float = 0.105
     local_freight: float = 0.0
     intl_freight: float = 0.0
     import_charge: float = 0.0

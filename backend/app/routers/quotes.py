@@ -16,7 +16,9 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db import get_session
 from app.core.security import get_current_user, can_see_cost, require_role
-from app.core.serialize import quote_out, client_preview_out, product_engine_price
+from app.core.serialize import (
+    quote_out, client_preview_out, product_engine_price, root_quote_no,
+)
 from app.core.pricing import compute_quote, QuoteLineInput, AddOns
 from app.models import Quote, QuoteLine, Product, FxRate, TermsTemplate, EmailSetup, AppSettings
 from app.schemas import QuoteCreate, QuoteStatusUpdate
@@ -123,11 +125,25 @@ def _fy_code(today: date | None = None) -> str:
 
 
 def _next_quote_no(db: Session) -> str:
+    """Next original quotation number for the current financial year.
+
+    Only originals consume a sequence number — revisions are suffixed onto their
+    original's number (see `_next_revision_no`), so they're excluded here or the
+    counter would skip ahead by one for every revision ever raised.
+    """
     fy = _fy_code()
     prefix = f"EVAVO/QTN/{fy}/"
     n = db.execute(select(func.count(Quote.id)).where(
-        Quote.quote_no.like(prefix + "%"))).scalar_one()
+        Quote.quote_no.like(prefix + "%"), Quote.revision_no == 0)).scalar_one()
     return f"{prefix}{n + 1:04d}"
+
+
+def _revision_family(db: Session, root_id: int) -> list[Quote]:
+    """The original quote plus every revision raised against it, oldest first."""
+    rows = db.execute(
+        select(Quote).where((Quote.id == root_id) | (Quote.root_quote_id == root_id))
+        .order_by(Quote.revision_no, Quote.id)).scalars().all()
+    return list(rows)
 
 
 def _get_settings(db: Session) -> AppSettings:
@@ -136,26 +152,35 @@ def _get_settings(db: Session) -> AppSettings:
 
 
 def _build_lines(db: Session, body: QuoteCreate, default_gst_pct: float) -> list[QuoteLine]:
+    """Snapshot the quote's lines.
+
+    A line's `unit_price` is the product's **list** price (the engine's client
+    price plus its list uplift) — the figure the customer sees as "Unit Price",
+    which the line discount then comes off to give the Discounted Unit Price.
+    """
     lines: list[QuoteLine] = []
     for li in body.lines:
         product = db.get(Product, li.product_id) if li.product_id else None
         if product is not None:
             client_unit, final_c2e = product_engine_price(product)
+            list_unit = client_unit * (1 + product.list_uplift)
             name = li.name or product.name
             model_no = li.model_no or product.model_no
             hsn_code = product.hsn_code
             gst_pct = product.gst_pct if product.gst_pct is not None else default_gst_pct
+            area_category = product.area_category
         else:
             if li.unit_price is None or not li.name:
                 raise HTTPException(422, "Free-form line needs name and unit_price")
-            client_unit, final_c2e = li.unit_price, 0.0
+            list_unit, final_c2e = li.unit_price, 0.0
             name, model_no = li.name, li.model_no
             hsn_code, gst_pct = None, default_gst_pct
-        unit_price = li.unit_price if li.unit_price is not None else client_unit
+            area_category = None
+        unit_price = li.unit_price if li.unit_price is not None else list_unit
         line_net = unit_price * li.qty * (1.0 - li.line_disc / 100.0)
         lines.append(QuoteLine(
             product_id=li.product_id, name=name, model_no=model_no,
-            qty=li.qty, line_disc=li.line_disc,
+            qty=li.qty, line_disc=li.line_disc, area_category=area_category,
             hsn_code=hsn_code, gst_pct=gst_pct,
             gst_amount=line_net * gst_pct / 100.0,
             unit_price=unit_price, unit_cost=final_c2e,
@@ -173,10 +198,14 @@ def _resolve_addons(body: QuoteCreate, s: AppSettings) -> AddOns:
     return AddOns(
         install_enabled=body.install_enabled,
         install_pct=body.install_pct,
+        install_dry_pct=pick(body.install_dry_pct, s.install_dry_pct),
+        install_wet_pct=pick(body.install_wet_pct, s.install_wet_pct),
         install_amount=body.install_amount,
         packaging=body.packaging,
         local_freight=local, intl_freight=intl, import_charge=imp,
         gst_default_pct=pick(body.gst_default_pct, s.gst_default_pct),
+        overall_disc_pct=body.overall_disc_pct,
+        overall_disc_amount=body.overall_disc_amount,
         home_state=s.home_state or "",
         place_of_supply=body.place_of_supply or "",
     )
@@ -191,8 +220,14 @@ def _prepare_quote_write(db: Session, body: QuoteCreate, user, s: AppSettings):
         over_cap = any(li.line_disc > s.max_discount_pct for li in body.lines)
     addons = _resolve_addons(body, s)
     lines = _build_lines(db, body, addons.gst_default_pct)
+    # Keyword args deliberately: these inputs must stay in step with the
+    # recompute in `serialize.quote_out`, or the snapshotted totals on the Quote
+    # row drift from what every read path shows (a positional call here once
+    # silently dropped `area_category` and under-charged installation).
     _, totals = compute_quote(
-        [QuoteLineInput(l.unit_price, l.unit_cost, l.qty, l.line_disc, l.gst_pct)
+        [QuoteLineInput(unit_price=l.unit_price, final_c2e=l.unit_cost, qty=l.qty,
+                        line_disc=l.line_disc, gst_pct=l.gst_pct,
+                        area_category=l.area_category or "")
          for l in lines],
         addons,
     )
@@ -213,9 +248,12 @@ def create_quote(body: QuoteCreate, db: Session = Depends(get_session),
         share_token=secrets.token_urlsafe(24),
         currency=body.currency, terms_template_id=body.terms_template_id,
         install_enabled=body.install_enabled, install_pct=body.install_pct,
+        install_dry_pct=addons.install_dry_pct, install_wet_pct=addons.install_wet_pct,
         install_amount=body.install_amount, packaging=body.packaging,
         freight=totals.freight, local_freight=addons.local_freight,
         intl_freight=addons.intl_freight, import_charge=addons.import_charge,
+        overall_disc_pct=body.overall_disc_pct,
+        overall_disc_amount=body.overall_disc_amount,
         place_of_supply=body.place_of_supply, home_state=s.home_state,
         gst_default_pct=addons.gst_default_pct,
         subtotal_net=totals.subtotal_net, grand_total=totals.grand_total,
@@ -257,12 +295,16 @@ def update_quote(quote_id: int, body: QuoteCreate, db: Session = Depends(get_ses
     quote.terms_template_id = body.terms_template_id
     quote.install_enabled = body.install_enabled
     quote.install_pct = body.install_pct
+    quote.install_dry_pct = addons.install_dry_pct
+    quote.install_wet_pct = addons.install_wet_pct
     quote.install_amount = body.install_amount
     quote.packaging = body.packaging
     quote.freight = totals.freight
     quote.local_freight = addons.local_freight
     quote.intl_freight = addons.intl_freight
     quote.import_charge = addons.import_charge
+    quote.overall_disc_pct = body.overall_disc_pct
+    quote.overall_disc_amount = body.overall_disc_amount
     quote.place_of_supply = body.place_of_supply
     quote.home_state = s.home_state
     quote.gst_default_pct = addons.gst_default_pct
@@ -293,6 +335,8 @@ def list_quotes(db: Session = Depends(get_session), user=Depends(get_current_use
         "status": q.status, "currency": q.currency,
         "grand_total": round(q.grand_total, 2), "needs_approval": q.needs_approval,
         "approved": q.approved,
+        "revision_no": q.revision_no, "root_quote_id": q.root_quote_id or q.id,
+        "root_quote_no": root_quote_no(q.quote_no),
         **({"total_cost": round(q.total_cost, 2)} if include else {}),
     } for q in rows]
 
@@ -309,11 +353,15 @@ def get_quote(quote_id: int, db: Session = Depends(get_session),
 @router.get("/{quote_id}/preview")
 def preview_quote(quote_id: int, db: Session = Depends(get_session),
                   user=Depends(get_current_user)):
-    """Client-safe preview — selling prices only, no cost ever (any role)."""
+    """Client-safe preview — selling prices only, no cost ever (any role).
+
+    Passes `db` so each line carries its product image and specification, which
+    the Client Preview screen renders alongside the item name.
+    """
     q = db.get(Quote, quote_id)
     if not q:
         raise HTTPException(404, "Quote not found")
-    return client_preview_out(q)
+    return client_preview_out(q, db=db)
 
 
 @router.patch("/{quote_id}/status")
@@ -457,31 +505,75 @@ def quote_share_summary(token: str, db: Session = Depends(get_session)):
                     headers={"Content-Disposition": f'inline; filename="{fname}"'})
 
 
+@router.get("/{quote_id}/history")
+def quote_history(quote_id: int, db: Session = Depends(get_session),
+                  user=Depends(get_current_user)):
+    """The full revision chain this quote belongs to, oldest first.
+
+    Returned for any member of the family, so opening a revision shows the
+    original it came from as well as its sibling revisions.
+    """
+    q = db.get(Quote, quote_id)
+    if not q:
+        raise HTTPException(404, "Quote not found")
+    root_id = q.root_quote_id or q.id
+    family = _revision_family(db, root_id)
+    return {
+        "root_quote_id": root_id,
+        "current_quote_id": q.id,
+        "quotes": [{
+            "id": m.id, "quote_no": m.quote_no, "revision_no": m.revision_no,
+            "is_original": m.revision_no == 0,
+            "label": "Original" if m.revision_no == 0 else f"Revision {m.revision_no}",
+            "revision_of": m.revision_of,
+            "status": m.status, "approved": m.approved,
+            "date": m.created_at.isoformat() if m.created_at else None,
+            "final_payable": round(m.final_payable, 2),
+        } for m in family],
+    }
+
+
 @router.post("/{quote_id}/revise")
 def revise_quote(quote_id: int, db: Session = Depends(get_session),
                  user=Depends(get_current_user)):
-    """Create an editable draft revision of an existing quote (keeps history)."""
+    """Create an editable draft revision of an existing quote (keeps history).
+
+    The revision is numbered off the ORIGINAL quotation, not off a fresh
+    sequence number — EVAVO/QTN/26-27/0045 begets ...0045-R1, then ...0045-R2 —
+    and carries `root_quote_id` back to that original plus `revision_of` to the
+    quote it was actually forked from, so the chain stays readable however deep
+    it goes.
+    """
     src = db.get(Quote, quote_id)
     if not src:
         raise HTTPException(404, "Quote not found")
+    root_id = src.root_quote_id or src.id
+    root = db.get(Quote, root_id) or src
+    family = _revision_family(db, root_id)
+    revision_no = max((m.revision_no for m in family), default=0) + 1
     rev = Quote(
-        quote_no=_next_quote_no(db), client_id=src.client_id,
+        quote_no=f"{root.quote_no}-R{revision_no}", client_id=src.client_id,
         customer_name=src.customer_name, customer_email=src.customer_email,
         customer_address=src.customer_address, customer_mobile=src.customer_mobile,
         share_token=secrets.token_urlsafe(24),
         currency=src.currency, terms_template_id=src.terms_template_id,
         install_enabled=src.install_enabled, install_pct=src.install_pct,
+        install_dry_pct=src.install_dry_pct, install_wet_pct=src.install_wet_pct,
         install_amount=src.install_amount, packaging=src.packaging, freight=src.freight,
         local_freight=src.local_freight, intl_freight=src.intl_freight,
         import_charge=src.import_charge, place_of_supply=src.place_of_supply,
+        overall_disc_pct=src.overall_disc_pct,
+        overall_disc_amount=src.overall_disc_amount,
         home_state=src.home_state, gst_default_pct=src.gst_default_pct,
         subtotal_net=src.subtotal_net, grand_total=src.grand_total,
         taxable_amount=src.taxable_amount, gst_total=src.gst_total,
         cgst=src.cgst, sgst=src.sgst, igst=src.igst, final_payable=src.final_payable,
         total_cost=src.total_cost, needs_approval=src.needs_approval,
-        revision_of=src.id, status="draft", approved=False,
+        revision_of=src.id, root_quote_id=root_id, revision_no=revision_no,
+        status="draft", approved=False,
         lines=[QuoteLine(product_id=l.product_id, name=l.name, model_no=l.model_no,
-                         qty=l.qty, line_disc=l.line_disc, hsn_code=l.hsn_code,
+                         qty=l.qty, line_disc=l.line_disc, area_category=l.area_category,
+                         hsn_code=l.hsn_code,
                          gst_pct=l.gst_pct, gst_amount=l.gst_amount,
                          unit_price=l.unit_price, unit_cost=l.unit_cost) for l in src.lines],
     )

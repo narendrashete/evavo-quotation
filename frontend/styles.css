@@ -121,6 +121,8 @@ table.items input{width:62px;border:1px solid var(--line);border-radius:7px;padd
 .sum-row{display:flex;justify-content:space-between;padding:8px 0;font-size:13.5px;border-bottom:1px dashed var(--line)}
 .sum-row.total{border-bottom:0;border-top:2px solid var(--navy);margin-top:6px;padding-top:12px;font-size:18px;font-weight:800;color:var(--navy)}
 .sum-row .muted{color:var(--muted)}
+/* Indented breakdown rows under a total (e.g. dry/wet installation split). */
+.sum-row.sub{padding:4px 0 4px 10px;font-size:12px;border-bottom:0}
 .addon-row{display:flex;align-items:center;justify-content:space-between;font-size:12.5px;padding:6px 0}
 .addon-row label{display:flex;align-items:center;gap:7px;color:#46586a}
 .addon-row input[type=number]{width:84px;border:1px solid var(--line);border-radius:7px;padding:5px 7px;text-align:right}

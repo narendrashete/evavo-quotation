@@ -121,6 +121,64 @@ def test_quote_no_approval_under_threshold():
     assert totals.needs_approval is False
 
 
+def test_installation_charged_per_work_area():
+    lines = [
+        QuoteLineInput(unit_price=1000.0, final_c2e=400.0, qty=1, area_category="Dry Area"),
+        QuoteLineInput(unit_price=2000.0, final_c2e=800.0, qty=1, area_category="Wet Area"),
+        QuoteLineInput(unit_price=500.0, final_c2e=200.0, qty=1, area_category="Others"),
+    ]
+    _, totals = compute_quote(lines, AddOns(install_pct=0.10, install_dry_pct=0.05,
+                                            install_wet_pct=0.20))
+    assert math.isclose(totals.install_dry, 50.0)      # 1000 * 5%
+    assert math.isclose(totals.install_wet, 400.0)     # 2000 * 20%
+    assert math.isclose(totals.install_other, 50.0)    # 500 * 10%
+    assert math.isclose(totals.installation, 500.0)
+
+
+def test_uncategorised_lines_fall_back_to_the_single_install_pct():
+    # No area on the line and no dry/wet rates set -> the old single-rate behaviour.
+    lines = [QuoteLineInput(unit_price=1000.0, final_c2e=400.0, qty=1)]
+    _, totals = compute_quote(lines, AddOns(install_pct=0.105))
+    assert math.isclose(totals.installation, 105.0)
+    assert math.isclose(totals.install_other, 105.0)
+
+
+def test_overall_discount_pct_scales_goods_install_and_gst():
+    lines = [QuoteLineInput(unit_price=1000.0, final_c2e=400.0, qty=1, gst_pct=18.0)]
+    _, totals = compute_quote(lines, AddOns(install_pct=0.10, gst_default_pct=18.0,
+                                            overall_disc_pct=10.0))
+    assert math.isclose(totals.subtotal_net, 1000.0)   # pre-overall-discount
+    assert math.isclose(totals.overall_discount, 100.0)
+    assert math.isclose(totals.goods_net, 900.0)
+    assert math.isclose(totals.installation, 90.0)     # 10% of the DISCOUNTED goods
+    assert math.isclose(totals.taxable_amount, 990.0)  # 900 + 90
+    assert math.isclose(totals.gst_total, 178.2)       # 18% of 990
+    assert math.isclose(totals.final_payable, 1168.2)
+
+
+def test_overall_discount_amount_overrides_pct_and_clamps():
+    lines = [QuoteLineInput(unit_price=1000.0, final_c2e=400.0, qty=1)]
+    _, totals = compute_quote(lines, AddOns(install_enabled=False, overall_disc_pct=50.0,
+                                            overall_disc_amount=250.0))
+    assert math.isclose(totals.overall_discount, 250.0)   # amount wins
+    assert math.isclose(totals.goods_net, 750.0)
+    # Can never discount past the subtotal.
+    _, capped = compute_quote(lines, AddOns(install_enabled=False,
+                                            overall_disc_amount=99999.0))
+    assert math.isclose(capped.overall_discount, 1000.0)
+    assert capped.goods_net == 0.0
+
+
+def test_overall_discount_counts_towards_approval():
+    # 9% line discount alone is under policy; a further 5% overall pushes it over.
+    lines = [QuoteLineInput(unit_price=1000.0, final_c2e=400.0, qty=1, line_disc=9.0)]
+    _, ok = compute_quote(lines)
+    assert ok.needs_approval is False
+    _, flagged = compute_quote(lines, AddOns(overall_disc_pct=5.0))
+    assert flagged.needs_approval is True
+    assert flagged.effective_disc_pct > 12.0
+
+
 def test_display_conversion():
     assert math.isclose(convert_for_display(83500.0, 83.5), 1000.0)
     assert convert_for_display(900.0, 1.0) == 900.0  # INR -> INR

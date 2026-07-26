@@ -58,12 +58,12 @@
         <div class="kpis" id="kpis"></div>
         <div class="card pad hide" id="approvalsPanelCard" style="margin-bottom:16px">
           <div class="section-title">⏳ Approvals Pending</div>
-          <table class="tbl"><thead><tr><th>Quote No.</th><th>Client</th><th class="num">Value</th><th></th></tr></thead><tbody id="approvalsPending"></tbody></table>
+          <table class="tbl"><thead><tr><th>Quote No.</th><th>Company Name</th><th class="num">Value</th><th></th></tr></thead><tbody id="approvalsPending"></tbody></table>
         </div>
         <div class="dash-grid">
           <div class="card pad">
             <div class="section-title">Recent Quotes</div>
-            <table class="tbl"><thead><tr><th>Quote No.</th><th>Client</th><th class="num">Value</th><th>Status</th></tr></thead><tbody id="recentQuotes"></tbody></table>
+            <table class="tbl"><thead><tr><th>Quote No.</th><th>Company Name</th><th class="num">Value</th><th>Status</th></tr></thead><tbody id="recentQuotes"></tbody></table>
           </div>
           <div class="card pad">
             <div class="section-title">Pipeline by Stage</div>
@@ -107,7 +107,7 @@
                 <div class="field" style="grid-column:1/-1"><label>Lead</label><select id="qLead" onchange="onLeadSelected()"><option value="">— none, enter manually —</option></select>
                   <div id="qLeadInfo" style="font-size:11.5px;color:var(--muted);margin-top:4px"></div>
                 </div>
-                <div class="field"><label>Customer</label><input id="qCustomer" placeholder="Customer / company name"></div>
+                <div class="field"><label>Company Name</label><input id="qCustomer" placeholder="Company name"></div>
                 <div class="field"><label>Client Email</label><input id="qEmail" type="email" placeholder="client@example.com"></div>
                 <div class="field"><label>WhatsApp Number</label><input id="qMobile" placeholder="Defaults from the Lead/Client — edit if needed"></div>
                 <div class="field" style="grid-column:1/-1"><label>Customer Address</label><textarea id="qAddress" rows="2"></textarea></div>
@@ -124,18 +124,27 @@
                 <button class="btn primary sm" id="addProductsBtn" onclick="openPicker()" style="height:39px">🛍️ Add Products<span class="cartbadge" id="addBadge">0</span></button>
               </div>
               <div class="tbl-wrap"><table class="items"><thead><tr>
-                <th style="width:56px"></th><th>Product</th><th class="num">Unit Price</th><th class="num">Qty</th><th class="num">Disc %</th>
-                <th class="num">HSN</th><th class="num">GST %</th><th class="num">GST Amt</th>
-                <th class="num cost-col" data-cost>Cost</th><th class="num cost-col" data-cost>Margin</th><th class="num">Amount</th><th></th>
+                <th class="num" style="width:30px">Sr.</th><th style="width:56px">Image</th><th>Product Name</th>
+                <th class="num">Unit Price</th><th class="num">Discount %</th><th class="num">Discounted Unit Price</th>
+                <th class="num">QTY</th><th class="num">HSN</th><th class="num">Amount</th>
+                <th class="num cost-col" data-cost>Cost</th><th class="num cost-col" data-cost>Margin</th><th></th>
               </tr></thead><tbody id="itemsBody"></tbody></table></div>
             </div>
           </div>
           <div class="summary"><div class="card pad">
             <div class="section-title">Summary</div>
             <div class="sum-row"><span class="muted">Items subtotal</span><span id="sSub" class="num">—</span></div>
-            <div class="sum-row"><span class="muted">Discount given</span><span id="sDisc" class="num">—</span></div>
+            <div class="sum-row"><span class="muted">Line discounts</span><span id="sDisc" class="num">—</span></div>
+            <div style="margin:12px 0 4px" class="section-title">Overall Discount</div>
+            <div class="addon-row"><label>Overall discount %</label><input type="number" id="aOverallPct" min="0" max="100" step="0.5" placeholder="0" oninput="onOverallDiscPct()"></div>
+            <div class="addon-row"><label>Overall discount amount</label><input type="number" id="aOverallAmt" min="0" placeholder="0" oninput="onOverallDiscAmt()"></div>
+            <div class="sum-row"><span class="muted">Overall discount</span><span id="sOverall" class="num">—</span></div>
+            <div class="sum-row"><span class="muted">Net goods value</span><span id="sGoodsNet" class="num">—</span></div>
             <div style="margin:12px 0 4px" class="section-title">Add-on Charges</div>
-            <div class="addon-row"><label><input type="checkbox" id="aInstall" checked onchange="recalc()"> Installation @ <input type="number" id="aInstallPct" value="10.5" step="0.5" min="0" style="width:56px" onchange="recalc()" oninput="recalc()">%</label><span id="sInstall" class="num">—</span></div>
+            <div class="addon-row"><label><input type="checkbox" id="aInstall" checked onchange="recalc()"> Installation</label><span id="sInstall" class="num">—</span></div>
+            <div class="sum-row sub" id="rowInstDry"><span class="muted">· Dry area @ <span id="lblDryPct">—</span>%</span><span id="sInstDry" class="num">—</span></div>
+            <div class="sum-row sub" id="rowInstWet"><span class="muted">· Wet area @ <span id="lblWetPct">—</span>%</span><span id="sInstWet" class="num">—</span></div>
+            <div class="sum-row sub" id="rowInstOther"><span class="muted">· Others @ <span id="lblOtherPct">—</span>%</span><span id="sInstOther" class="num">—</span></div>
             <div class="addon-row"><label>Installation charge (override)</label><input type="number" id="aInstallAmt" placeholder="auto" onchange="recalc()" oninput="recalc()"></div>
             <div class="addon-row"><label>Special packaging</label><input type="number" id="aPack" value="0" onchange="recalc()" oninput="recalc()"></div>
             <div class="addon-row"><label>Local freight</label><input type="number" id="aLocalFreight" value="0" onchange="recalc()" oninput="recalc()"></div>
@@ -162,13 +171,18 @@
       <section class="view" id="preview">
         <div class="page-head"><div><h1>Client Preview</h1><p>Exactly what the client receives — selling prices only.</p></div><div style="display:flex;gap:9px;flex-wrap:wrap"><button class="btn ghost" onclick="goto('builder')">← Edit</button><button class="btn ghost" id="reviseBtn" onclick="reviseCurrent()">🔁 Revise</button><button class="btn primary" id="pdfBtn" onclick="downloadPdf()">⬇ Download PDF</button><button class="btn teal" id="emailBtn" onclick="emailCurrent()">✉ Email to client</button><button class="btn whatsapp" id="waBtn" onclick="whatsappCurrent()">📱 Send by WhatsApp</button></div></div>
         <div class="safe-note">🔒 Client-safe view — internal cost, margin and FX build-up are never included in this document.</div>
+        <div class="card pad hide" id="historyCard" style="margin-bottom:16px">
+          <div class="section-title">🔁 Quotation History</div>
+          <p class="muted" style="font-size:12px;margin:0 0 10px">Every revision raised against the original quotation, newest last. Click a row to open it.</p>
+          <table class="tbl"><thead><tr><th>Version</th><th>Quotation No.</th><th>Date</th><th>Status</th><th class="num">Final Payable</th></tr></thead><tbody id="historyRows"></tbody></table>
+        </div>
         <div class="paper">
           <div class="ph"><div><div class="l">EV</div><h2>Evavo Wellness &amp; Solutions LLP</h2><div style="font-size:11.5px;color:#aecbe6;margin-top:4px">Spa Consulting · Spa &amp; Salon Equipment</div></div><div class="qmeta"><b style="color:#fff;font-size:14px">QUOTATION</b><br>No: <span id="pvNo">—</span><br>Date: <span id="pvDate">—</span><br>Valid: 2 weeks<br><span class="badge warn hide" id="pvApprovalBadge" style="margin-top:6px;display:inline-block">⏳ Pending Approval</span></div></div>
           <div class="approval hide" id="previewApprovalNote" style="margin:16px 16px 0">⏳ <b>Awaiting manager approval</b> — this quote exceeds the discount policy and can't be emailed or WhatsApped until a manager/admin approves it.</div>
           <div class="pb">
             <div class="to"><div><b>Bill To</b><span id="pvBillTo">—</span></div><div style="text-align:right"><b>Currency</b><span id="pvCur">INR (₹)</span></div></div>
-            <table class="cli"><thead><tr><th>#</th><th>Item</th><th class="num">HSN</th><th class="num">Unit Price</th><th class="num">Qty</th><th class="num">GST</th><th class="num">Amount</th></tr></thead><tbody id="pvBody"></tbody></table>
-            <div class="cli-tot"><div class="r"><span>Subtotal</span><span id="pvSub" class="num">—</span></div><div class="r"><span>Installation</span><span id="pvInstall" class="num">—</span></div><div class="r"><span>Packaging</span><span id="pvPack" class="num">—</span></div><div class="r"><span>Freight &amp; import</span><span id="pvFreight" class="num">—</span></div><div class="r"><span>Taxable amount</span><span id="pvTaxable" class="num">—</span></div><div class="r" id="pvRowCgst"><span>CGST</span><span id="pvCgst" class="num">—</span></div><div class="r" id="pvRowSgst"><span>SGST</span><span id="pvSgst" class="num">—</span></div><div class="r" id="pvRowIgst"><span>IGST</span><span id="pvIgst" class="num">—</span></div><div class="r g"><span>Final Payable</span><span id="pvGrand" class="num">—</span></div></div>
+            <table class="cli"><thead><tr><th>#</th><th>Item</th><th class="num">Unit Price</th><th class="num">Disc %</th><th class="num">Discounted Unit Price</th><th class="num">Qty</th><th class="num">HSN</th><th class="num">Amount</th></tr></thead><tbody id="pvBody"></tbody></table>
+            <div class="cli-tot"><div class="r"><span>Subtotal</span><span id="pvSub" class="num">—</span></div><div class="r hide" id="pvRowOverall"><span>Overall discount</span><span id="pvOverall" class="num">—</span></div><div class="r"><span>Installation</span><span id="pvInstall" class="num">—</span></div><div class="r"><span>Packaging</span><span id="pvPack" class="num">—</span></div><div class="r"><span>Freight &amp; import</span><span id="pvFreight" class="num">—</span></div><div class="r"><span>Taxable amount</span><span id="pvTaxable" class="num">—</span></div><div class="r" id="pvRowCgst"><span>CGST</span><span id="pvCgst" class="num">—</span></div><div class="r" id="pvRowSgst"><span>SGST</span><span id="pvSgst" class="num">—</span></div><div class="r" id="pvRowIgst"><span>IGST</span><span id="pvIgst" class="num">—</span></div><div class="r g"><span>Final Payable</span><span id="pvGrand" class="num">—</span></div></div>
             <div class="terms" id="pvTerms"></div>
           </div>
         </div>
@@ -188,7 +202,7 @@
 
       <!-- Leads Master -->
       <section class="view" id="leadsMaster">
-        <div class="page-head"><div><h1>Leads</h1><p>Lead intake, tied to a project (the client is auto-derived). Pipeline stage drives the Sales Pipeline board.</p></div></div>
+        <div class="page-head"><div><h1>Leads</h1><p>Lead intake, tied to a project (the company name is auto-derived). Pipeline stage drives the Sales Pipeline board.</p></div></div>
         <div id="leadsMasterContent"></div>
       </section>
 
@@ -244,7 +258,7 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="api.js?v=11"></script>
-<script src="app.js?v=11"></script>
+<script src="api.js?v=12"></script>
+<script src="app.js?v=12"></script>
 </body>
 </html>

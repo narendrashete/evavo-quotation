@@ -55,10 +55,20 @@ def test_create_quote_computes_totals(client, manager_headers):
     assert r.status_code == 200, r.text
     q = r.json()
     assert q["quote_no"].startswith("EVAVO/QTN/")
-    # Pedicure 118800*1.5*2 = 356400 (qty 2 -> 712800); Facial 66300*1.5*2 = 198900
-    # subtotal_net = (712800 + 198900) * (1-0.09) = 911700 * 0.91 = 829647
-    assert abs(q["totals"]["subtotal_net"] - 829647.0) < 1.0
+    # A line's Unit Price is the LIST price (client price * 1.10), which the line
+    # discount then comes off. Pedicure 118800*1.5*2 = 356400 client -> 392040
+    # list (qty 2 -> 784080); Facial 66300*1.5*2 = 198900 -> 218790 list.
+    # subtotal_net = (784080 + 218790) * (1-0.09) = 1002870 * 0.91 = 912611.70
+    assert abs(q["totals"]["subtotal_net"] - 912611.70) < 1.0
     assert "total_cost" in q["totals"]  # manager sees cost
+
+
+def test_quote_line_exposes_unit_and_discounted_price(client, manager_headers):
+    q = client.post("/api/quotes", json=_new_quote_payload(line_disc=10.0),
+                    headers=manager_headers).json()
+    line = q["lines"][0]
+    assert abs(line["unit_price"] - 392040.0) < 1.0            # list price
+    assert abs(line["discounted_unit_price"] - 352836.0) < 1.0  # less 10%
 
 
 def test_quote_preview_never_has_cost(client, manager_headers):
@@ -155,6 +165,116 @@ def test_revise_creates_linked_revision(client, manager_headers):
     assert rev["id"] != created["id"]
     assert rev["status"] == "draft"
     assert len(rev["lines"]) == len(created["lines"])
+    # Numbered off the original, and pointing back at it.
+    assert rev["quote_no"] == created["quote_no"] + "-R1"
+    assert rev["revision_no"] == 1
+    assert rev["revision_of"] == created["id"]
+    assert rev["root_quote_id"] == created["id"]
+    assert rev["root_quote_no"] == created["quote_no"]
+
+
+def test_revisions_chain_off_the_original_not_the_parent(client, manager_headers):
+    original = client.post("/api/quotes", json=_new_quote_payload(),
+                           headers=manager_headers).json()
+    r1 = client.post(f"/api/quotes/{original['id']}/revise", headers=manager_headers).json()
+    # Revising R1 gives R2 (numbered off the original), not "...-R1-R1".
+    r2 = client.post(f"/api/quotes/{r1['id']}/revise", headers=manager_headers).json()
+    assert r2["quote_no"] == original["quote_no"] + "-R2"
+    assert r2["revision_no"] == 2
+    assert r2["revision_of"] == r1["id"]        # forked from R1
+    assert r2["root_quote_id"] == original["id"]  # but rooted at the original
+
+    # A brand-new quote still gets the next *original* number — revisions don't
+    # consume sequence numbers.
+    nxt = client.post("/api/quotes", json=_new_quote_payload(),
+                      headers=manager_headers).json()
+    assert nxt["quote_no"].endswith("0002") and nxt["revision_no"] == 0
+
+    hist = client.get(f"/api/quotes/{r1['id']}/history", headers=manager_headers).json()
+    assert [q["quote_no"] for q in hist["quotes"]] == [
+        original["quote_no"], r1["quote_no"], r2["quote_no"]]
+    assert [q["label"] for q in hist["quotes"]] == ["Original", "Revision 1", "Revision 2"]
+    assert hist["current_quote_id"] == r1["id"]
+    assert hist["quotes"][0]["is_original"] is True
+
+
+def test_overall_discount_reduces_final_payable(client, manager_headers):
+    payload = _new_quote_payload(line_disc=0.0)
+    payload["install_enabled"] = False
+    payload["gst_default_pct"] = 0.0
+    base = client.post("/api/quotes", json=payload, headers=manager_headers).json()
+    subtotal = base["totals"]["subtotal_net"]
+
+    payload["overall_disc_pct"] = 5.0
+    disc = client.post("/api/quotes", json=payload, headers=manager_headers).json()
+    t = disc["totals"]
+    assert abs(t["overall_discount"] - subtotal * 0.05) < 1.0
+    assert abs(t["goods_net"] - subtotal * 0.95) < 1.0
+    assert abs(t["final_payable"] - subtotal * 0.95) < 1.0
+
+    # A flat amount wins over the percentage.
+    payload["overall_disc_amount"] = 10000.0
+    flat = client.post("/api/quotes", json=payload, headers=manager_headers).json()
+    assert abs(flat["totals"]["overall_discount"] - 10000.0) < 0.01
+
+
+def test_installation_uses_per_area_rates(client, manager_headers):
+    # Categorise product 1 as Wet Area and leave product 2 uncategorised, then
+    # quote both with distinct dry/wet/other rates.
+    client.put("/api/masters/products/1", json={"area_category": "Wet Area"},
+               headers=manager_headers)
+    payload = _new_quote_payload(line_disc=0.0)
+    payload.update({"install_enabled": True, "gst_default_pct": 0.0,
+                    "install_pct": 0.10, "install_dry_pct": 0.05,
+                    "install_wet_pct": 0.20})
+    q = client.post("/api/quotes", json=payload, headers=manager_headers).json()
+    t = q["totals"]
+    # Wet line (product 1, qty 2 @ 392040) at 20%; the other line at 10%.
+    assert abs(t["install_wet"] - 784080 * 0.20) < 1.0
+    assert abs(t["install_other"] - 218790 * 0.10) < 1.0
+    assert t["install_dry"] == 0.0
+    assert abs(t["installation"] - (t["install_wet"] + t["install_other"])) < 0.01
+
+
+def test_saved_totals_match_the_recomputed_ones(client, manager_headers):
+    """The totals snapshotted on the Quote row must equal what read paths compute.
+
+    `create_quote` stores `final_payable` (used by the quote list, the revision
+    history and the WhatsApp/email message) while every read recomputes from the
+    line snapshots — if the two calls disagree on their inputs, the stored figure
+    silently drifts from the one the customer is shown.
+    """
+    client.put("/api/masters/products/1", json={"area_category": "Wet Area"},
+               headers=manager_headers)
+    client.put("/api/masters/products/2", json={"area_category": "Dry Area"},
+               headers=manager_headers)
+    payload = _new_quote_payload()
+    payload.update({"install_pct": 0.105, "install_dry_pct": 0.06,
+                    "install_wet_pct": 0.14, "overall_disc_pct": 5.0,
+                    "place_of_supply": "27"})
+    created = client.post("/api/quotes", json=payload, headers=manager_headers).json()
+
+    listed = client.get("/api/quotes", headers=manager_headers).json()
+    row = next(q for q in listed if q["id"] == created["id"])
+    assert abs(row["grand_total"] - created["totals"]["grand_total"]) < 0.01
+
+    hist = client.get(f"/api/quotes/{created['id']}/history",
+                      headers=manager_headers).json()
+    assert abs(hist["quotes"][0]["final_payable"]
+               - created["totals"]["final_payable"]) < 0.01
+
+
+def test_product_specification_is_editable_and_reaches_the_quote(client, manager_headers):
+    spec = "Electric height adjustment 620-880 mm, three-section top."
+    r = client.put("/api/masters/products/2", json={"description": spec},
+                   headers=manager_headers)
+    assert r.status_code == 200 and r.json()["description"] == spec
+    created = client.post("/api/quotes", json=_new_quote_payload(),
+                          headers=manager_headers).json()
+    preview = client.get(f"/api/quotes/{created['id']}/preview",
+                         headers=manager_headers).json()
+    specs = [l["specification"] for l in preview["lines"]]
+    assert spec in specs
 
 
 def test_manager_can_edit_product_pricing(client, manager_headers):

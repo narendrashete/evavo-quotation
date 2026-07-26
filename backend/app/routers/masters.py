@@ -26,10 +26,15 @@ router = APIRouter(prefix="/api/masters", tags=["masters"])
 _PRICING_FIELDS = {"source_price_inr", "loading_factor", "client_markup",
                    "list_uplift", "markup_base"}
 
+# Product columns that cannot be NULL — a null in an update body is ignored for
+# these rather than written through.
+_NON_NULLABLE_FIELDS = _PRICING_FIELDS | {"name", "category"}
+
 
 def _settings_dict(s: AppSettings) -> dict:
     return {"id": s.id, "max_discount_pct": s.max_discount_pct,
             "gst_default_pct": s.gst_default_pct, "install_pct": s.install_pct,
+            "install_dry_pct": s.install_dry_pct, "install_wet_pct": s.install_wet_pct,
             "local_freight": s.local_freight, "intl_freight": s.intl_freight,
             "import_charge": s.import_charge, "home_state": s.home_state}
 
@@ -126,7 +131,12 @@ def update_product(product_id: int, body: ProductUpdate, db: Session = Depends(g
     p = db.get(Product, product_id)
     if not p:
         raise HTTPException(404, "Product not found")
-    changes = body.model_dump(exclude_none=True)
+    # exclude_unset (not exclude_none) so a field the caller explicitly sends as
+    # null gets cleared — that's how the UI blanks HSN, area category or the
+    # specification. Pricing params are non-nullable, so a null there is dropped.
+    changes = body.model_dump(exclude_unset=True)
+    changes = {k: v for k, v in changes.items()
+               if v is not None or k not in _NON_NULLABLE_FIELDS}
     for k, v in changes.items():
         setattr(p, k, v)
     # Editing pricing params makes the migrated override snapshot stale — but
@@ -241,6 +251,8 @@ def list_leads(db: Session = Depends(get_session), user=Depends(get_current_user
     rows = db.execute(select(Lead).order_by(Lead.stage)).scalars().all()
     return [{"id": l.id, "name": l.name, "owner": l.owner, "stage": l.stage,
              "amount": l.amount, "project_id": l.project_id, "client_id": l.client_id,
+             "received_date": l.received_date.isoformat() if l.received_date else None,
+             "email": l.email, "requirement": l.requirement,
              "address": l.address, "whatsapp_number": l.whatsapp_number}
             for l in rows]
 

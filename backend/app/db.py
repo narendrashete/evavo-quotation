@@ -91,6 +91,23 @@ _NEW_COLUMNS = [
     ("quotes", "approved", "BOOLEAN DEFAULT FALSE"),
     ("quotes", "approved_by", "VARCHAR(120)"),
     ("quotes", "approved_at", "TIMESTAMP"),
+    # Lead master: enquiry intake fields
+    ("leads", "received_date", "DATE"),
+    ("leads", "email", "VARCHAR(200)"),
+    ("leads", "requirement", "TEXT"),
+    # Dry/wet area installation charges
+    ("products", "area_category", "VARCHAR(20)"),
+    ("quote_lines", "area_category", "VARCHAR(20)"),
+    ("app_settings", "install_dry_pct", "DOUBLE PRECISION DEFAULT 0.105"),
+    ("app_settings", "install_wet_pct", "DOUBLE PRECISION DEFAULT 0.105"),
+    ("quotes", "install_dry_pct", "DOUBLE PRECISION"),
+    ("quotes", "install_wet_pct", "DOUBLE PRECISION"),
+    # Quote-level overall discount
+    ("quotes", "overall_disc_pct", "DOUBLE PRECISION DEFAULT 0"),
+    ("quotes", "overall_disc_amount", "DOUBLE PRECISION"),
+    # Revision chain (original <- R1 <- R2 ...)
+    ("quotes", "root_quote_id", "INTEGER"),
+    ("quotes", "revision_no", "INTEGER DEFAULT 0"),
 ]
 
 

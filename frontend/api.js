@@ -55,6 +55,7 @@ const API = (() => {
     emailQuote: (id) => request("POST", "/api/quotes/" + id + "/email"),
     sendWhatsapp: (id) => request("POST", "/api/quotes/" + id + "/whatsapp"),
     reviseQuote: (id) => request("POST", "/api/quotes/" + id + "/revise"),
+    quoteHistory: (id) => request("GET", "/api/quotes/" + id + "/history"),
     async pdfBlob(id) {
       const res = await fetch("/api/quotes/" + id + "/pdf",
         { headers: { Authorization: "Bearer " + getToken() } });

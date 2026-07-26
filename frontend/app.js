@@ -17,7 +17,14 @@ let lastPreview = null;     // server client-preview payload after save
 let BUILDER_LEADS = [], BUILDER_PROJECTS = [], BUILDER_CLIENTS = [];
 let selectedClientId = null;  // resolved from the picked Lead, sent with the quote
 let SETTINGS = { max_discount_pct: 12, gst_default_pct: 18, install_pct: 0.105,
+                 install_dry_pct: 0.105, install_wet_pct: 0.105,
                  local_freight: 0, intl_freight: 0, import_charge: 0, home_state: "27" };
+
+// A line's Unit Price is the product's list price, and the standard offer is
+// that price less this discount — mirrors DEFAULT_LINE_DISC_PCT in pricing.py.
+const DEFAULT_LINE_DISC_PCT = 10;
+// Work-area categories, which pick the installation rate (see Settings).
+const AREA_CATEGORIES = ["Dry Area", "Wet Area", "Others"];
 
 // GST place-of-supply state codes (India), per the client's spec.
 const STATE_CODES = [
@@ -136,11 +143,29 @@ function buildPosOptions() {
 }
 // Pre-fill the editable add-on/GST fields from the configured defaults.
 function applyBuilderDefaults() {
-  if ($("aInstallPct")) $("aInstallPct").value = (SETTINGS.install_pct * 100).toFixed(1).replace(/\.0$/, "");
   if ($("qGst")) $("qGst").value = SETTINGS.gst_default_pct;
   if ($("aLocalFreight")) $("aLocalFreight").value = SETTINGS.local_freight || 0;
   if ($("aIntlFreight")) $("aIntlFreight").value = SETTINGS.intl_freight || 0;
   if ($("aImport")) $("aImport").value = SETTINGS.import_charge || 0;
+  INSTALL_RATES = { dry: pctOf(SETTINGS.install_dry_pct), wet: pctOf(SETTINGS.install_wet_pct),
+                    other: pctOf(SETTINGS.install_pct) };
+  showInstallRates();
+}
+// Installation percentages in force for the quote being built — from Settings
+// for a new quote, or restored from the quote's own snapshot when one is opened.
+let INSTALL_RATES = { dry: 10.5, wet: 10.5, other: 10.5 };
+const pctOf = (fraction) => Math.round((fraction || 0) * 1000) / 10;   // 0.105 -> 10.5
+function showInstallRates() {
+  if ($("lblDryPct")) $("lblDryPct").textContent = INSTALL_RATES.dry;
+  if ($("lblWetPct")) $("lblWetPct").textContent = INSTALL_RATES.wet;
+  if ($("lblOtherPct")) $("lblOtherPct").textContent = INSTALL_RATES.other;
+}
+// Installation rate for a product, by its work area.
+function installPctFor(p) {
+  const area = p && p.area_category;
+  if (area === "Dry Area") return INSTALL_RATES.dry;
+  if (area === "Wet Area") return INSTALL_RATES.wet;
+  return INSTALL_RATES.other;
 }
 
 function applyRoleVisibility() {
@@ -189,7 +214,8 @@ function onLeadSelected() {
   if (!project || !client) { selectedClientId = null; info.textContent = "This lead has no project/client linked yet."; return; }
   selectedClientId = client.id;
   $("qCustomer").value = client.name;
-  $("qEmail").value = client.email || "";
+  // The lead's own contact details win over the company's registered ones.
+  $("qEmail").value = lead.email || client.email || "";
   $("qAddress").value = lead.address || "";
   $("qMobile").value = lead.whatsapp_number || client.mobile || "";
   // Default place of supply from the client's GSTIN state prefix (first 2 digits).
@@ -198,9 +224,10 @@ function onLeadSelected() {
     $("qPos").value = posFromGstin;
   }
   recalc();
-  info.textContent = "Project: " + project.name + " · Client: " + client.name +
+  info.textContent = "Project: " + project.name + " · Company: " + client.name +
     (client.city ? " · " + client.city : "") + " · GSTIN: " + (client.gstin || "—") +
-    " · Phone: " + (client.phone || "—");
+    " · Handled by: " + (lead.owner || "—") +
+    (lead.requirement ? " · Requirement: " + clip(lead.requirement, 80) : "");
 }
 function buildCurrencyOptions() {
   const sel = $("curSel"); sel.innerHTML = "";
@@ -231,7 +258,7 @@ function goto(v) {
   document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === v));
   document.querySelectorAll(".bottomnav button").forEach((b) => b.classList.toggle("active", b.dataset.view === v));
   $("tbTitle").textContent = titles[v] || "";
-  if (v === "preview") renderPreview();
+  if (v === "preview") { renderPreview(); renderHistory(); }
   if (v === "clientsMaster") renderClientsMaster();
   if (v === "projectsMaster") renderProjectsMaster();
   if (v === "leadsMaster") renderLeadsMaster();
@@ -250,6 +277,7 @@ function newQuote() {
   $("qLead").value = ""; $("qAddress").value = ""; $("qLeadInfo").textContent = "";
   $("qCustomer").value = ""; $("qEmail").value = ""; $("qMobile").value = "";
   $("aInstall").checked = true; $("aInstallAmt").value = ""; $("aPack").value = 0;
+  $("aOverallPct").value = ""; $("aOverallAmt").value = "";
   if ($("qPos")) $("qPos").value = SETTINGS.home_state || "27";
   applyBuilderDefaults();
   applyLockState();
@@ -259,7 +287,8 @@ function newQuote() {
 // ---- Edit lock: only a "draft" quote is editable; anything else is locked
 // until Revise forks a new draft copy. ----
 const BUILDER_LOCK_IDS = ["qLead", "qCustomer", "qEmail", "qMobile", "qAddress", "curSel",
-  "qTerms", "qPos", "qGst", "aInstall", "aInstallPct", "aInstallAmt", "aPack",
+  "qTerms", "qPos", "qGst", "aInstall", "aInstallAmt", "aPack",
+  "aOverallPct", "aOverallAmt",
   "aLocalFreight", "aIntlFreight", "aImport", "saveBtn", "addProductsBtn"];
 function isLocked() { return !!(currentQuoteStatus && currentQuoteStatus !== "draft"); }
 function applyLockState() {
@@ -281,10 +310,14 @@ function renderProducts() {
       const d = document.createElement("div"); d.className = "prod";
       const costRow = (canSeeCost && p.final_c2e != null)
         ? '<div class="prow"><span>Cost (C2E)</span><span class="cost">₹ ' + p.final_c2e.toLocaleString("en-IN") + "</span></div>" : "";
+      const areaTag = p.area_category
+        ? ' <span class="badge cli">' + esc(p.area_category) + "</span>" : "";
       d.innerHTML = '<span style="cursor:pointer" title="View details" onclick="showProductDetail(' + p.id + ')">' + prodImg(p, "md") + "</span>" +
-        '<div class="pcat">' + p.category + '</div><b>' + p.name +
-        '</b><div class="pmodel">' + (p.model_no || "") + '</div><div class="prow"><span>List price</span><span class="price">₹ ' +
-        Math.round(p.list_price).toLocaleString("en-IN") + "</span></div>" + costRow;
+        '<div class="pcat">' + p.category + areaTag + '</div><b>' + p.name +
+        '</b><div class="pmodel">' + (p.model_no || "") + '</div><div class="prow"><span>Unit price</span><span class="price">₹ ' +
+        Math.round(p.unit_price).toLocaleString("en-IN") + "</span></div>" +
+        '<div class="prow"><span>Discounted unit price</span><span class="price">₹ ' +
+        Math.round(p.discounted_unit_price).toLocaleString("en-IN") + "</span></div>" + costRow;
       g.appendChild(d);
     });
   if (!g.children.length) g.innerHTML = '<div class="empty">No products match.</div>';
@@ -316,50 +349,67 @@ function renderPicker() {
       d.innerHTML = '<span style="cursor:pointer" title="View details" onclick="showProductDetail(' + p.id + ')">' + prodImg(p, "md") + "</span>" +
         '<div class="pk-b"><span class="pk-cat">' + p.category +
         '</span><b>' + p.name + '</b><span class="pk-model">' + (p.model_no || "") +
-        '</span><span class="pk-price">₹ ' + Math.round(p.client_unit_price).toLocaleString("en-IN") + "</span>" + costLine +
+        '</span><span class="pk-price">₹ ' + Math.round(p.discounted_unit_price).toLocaleString("en-IN") + "</span>" + costLine +
         '</div><div class="pk-add"><div class="qstep"><button onclick="pq(' + p.id + ',-1)">−</button><input id="pq' + p.id +
         '" value="1" readonly><button onclick="pq(' + p.id + ',1)">＋</button></div>' + pickAddBtnHtml(p) + '</div>';
       g.appendChild(d);
     });
 }
 function pq(id, delta) { const i = $("pq" + id); i.value = Math.max(1, (parseInt(i.value, 10) || 1) + delta); }
-// ---- Product detail modal (image + description/specs + HSN/GST) ----
+// ---- Product detail modal (image + specification + area/HSN/GST + prices) ----
+// Manager/admin get the editable form (specification, work area, HSN, GST%);
+// sales see the same values read-only.
+const INPUT_STYLE = "border:1px solid var(--line);border-radius:6px;padding:3px 7px";
 function showProductDetail(id) {
   const p = prod(id); if (!p) return;
   $("pdTitle").textContent = p.name;
   const gp = p.gst_pct != null ? p.gst_pct + "%" : "default";
+  const areaOpts = ['<option value="">— not set —</option>'].concat(AREA_CATEGORIES.map((a) =>
+    '<option value="' + a + '"' + (p.area_category === a ? " selected" : "") + ">" + a + "</option>")).join("");
+  const areaRow = canSeeCost
+    ? '<div class="pd-row"><span>Product Category</span><select id="pdArea" style="' + INPUT_STYLE + '">' + areaOpts + "</select></div>"
+    : '<div class="pd-row"><span>Product Category</span><b>' + esc(p.area_category || "—") + "</b></div>";
   const hsnRow = canSeeCost
     ? '<div class="pd-row"><span>HSN Code</span><input id="pdHsn" value="' + esc(p.hsn_code || "") +
-      '" placeholder="—" style="width:120px;text-align:right;border:1px solid var(--line);border-radius:6px;padding:3px 7px"></div>'
+      '" placeholder="—" style="width:120px;text-align:right;' + INPUT_STYLE + '"></div>'
     : '<div class="pd-row"><span>HSN Code</span><b>' + esc(p.hsn_code || "—") + "</b></div>";
   const gstRow = canSeeCost
     ? '<div class="pd-row"><span>GST %</span><input id="pdGst" type="number" min="0" step="0.5" value="' +
-      (p.gst_pct != null ? p.gst_pct : "") + '" placeholder="default" style="width:80px;text-align:right;border:1px solid var(--line);border-radius:6px;padding:3px 7px"></div>'
+      (p.gst_pct != null ? p.gst_pct : "") + '" placeholder="default" style="width:80px;text-align:right;' + INPUT_STYLE + '"></div>'
     : '<div class="pd-row"><span>GST %</span><b>' + gp + "</b></div>";
   const saveRow = canSeeCost
     ? '<button class="btn primary sm" style="margin-top:6px" onclick="saveProductEdit(' + p.id + ')">💾 Save</button>' : "";
+  // Specification is editable for manager/admin — same Save button as the rest.
+  const specBlock = canSeeCost
+    ? '<div class="pd-desc"><b>Specification</b><textarea id="pdSpec" rows="6" style="width:100%;margin-top:6px;' +
+      INPUT_STYLE + '" placeholder="Product specification shown on the detailed quotation">' + esc(p.description || "") + "</textarea></div>"
+    : '<div class="pd-desc"><b>Specification</b><p>' + esc(p.description || "No specification available.") + "</p></div>";
   $("pdBody").innerHTML =
     '<div class="pd-grid">' + prodImg(p, "lg") +
     '<div class="pd-meta">' +
     '<div class="pd-row"><span>Model</span><b>' + esc(p.model_no || "—") + "</b></div>" +
     '<div class="pd-row"><span>Category</span><b>' + esc(p.category || "—") + "</b></div>" +
-    hsnRow + gstRow +
-    '<div class="pd-row"><span>List price</span><b>₹ ' + Math.round(p.list_price).toLocaleString("en-IN") + "</b></div>" +
+    areaRow + hsnRow + gstRow +
+    '<div class="pd-row"><span>Unit price</span><b>₹ ' + Math.round(p.unit_price).toLocaleString("en-IN") + "</b></div>" +
+    '<div class="pd-row"><span>Discounted unit price (−' + DEFAULT_LINE_DISC_PCT + '%)</span><b>₹ ' +
+      Math.round(p.discounted_unit_price).toLocaleString("en-IN") + "</b></div>" +
     saveRow +
-    "</div></div>" +
-    '<div class="pd-desc"><b>Specifications</b><p>' + esc(p.description || "No description available.") + "</p></div>";
+    "</div></div>" + specBlock;
   $("pdetail").classList.add("open");
 }
 async function saveProductEdit(id) {
   const hsn_code = $("pdHsn").value.trim() || null;
   const gstRaw = $("pdGst").value.trim();
   const gst_pct = gstRaw !== "" ? parseFloat(gstRaw) : null;
+  const area_category = $("pdArea").value || null;
+  const description = $("pdSpec").value.trim() || null;
   try {
-    await API.updateProduct(id, { hsn_code, gst_pct });
+    await API.updateProduct(id, { hsn_code, gst_pct, area_category, description });
     const p = prod(id);
-    if (p) { p.hsn_code = hsn_code; p.gst_pct = gst_pct; }
+    if (p) { p.hsn_code = hsn_code; p.gst_pct = gst_pct; p.area_category = area_category; p.description = description; }
     toast("Product updated.");
     renderProducts();
+    recalc();               // the work area may change installation charges
     showProductDetail(id);
   } catch (e) { toast("Update failed: " + e.message, true); }
 }
@@ -378,10 +428,11 @@ function pickToggle(id) {
     LINES.splice(idx, 1);                 // already in cart → remove it
   } else {
     const qty = parseInt($("pq" + id).value, 10) || 1;
-    LINES.push({ pid: id, qty, disc: 0 });
+    // New lines start at the standard discount off the list Unit Price.
+    LINES.push({ pid: id, qty, disc: DEFAULT_LINE_DISC_PCT });
   }
   setPickBtn(id);
-  renderItems(); recalc(); updateCart();
+  renderItems(); syncOverallDisc(); recalc(); updateCart();
 }
 function updateCart() {
   const n = LINES.length;
@@ -390,12 +441,16 @@ function updateCart() {
 }
 
 // ---- Line items ----
-function removeItem(idx) { LINES.splice(idx, 1); renderItems(); recalc(); updateCart(); }
+function removeItem(idx) { LINES.splice(idx, 1); renderItems(); syncOverallDisc(); recalc(); updateCart(); }
 // A line's effective GST% = the product's own rate, else the form-level default.
 function lineGstPct(p) {
   if (p && p.gst_pct != null) return p.gst_pct;
   return parseFloat($("qGst") && $("qGst").value) || 0;
 }
+// Detail section column order, per the client spec: Sr. No, Product Image,
+// Product Name, Unit Price, Discount %, Discounted Unit Price, QTY, HSN, Amount
+// (then the manager-only Cost/Margin columns). GST is no longer shown per line —
+// it appears once in the Summary as CGST/SGST or IGST.
 function renderItems() {
   const b = $("itemsBody"); b.innerHTML = "";
   if (!LINES.length) { b.innerHTML = '<tr><td colspan="12"><div class="empty">No items yet — click <b>🛍️ Add Products</b> to build the quote.</div></td></tr>'; return; }
@@ -403,18 +458,20 @@ function renderItems() {
   LINES.forEach((ln, idx) => {
     const p = prod(ln.pid); if (!p) return;
     const tr = document.createElement("tr");
-    const gp = lineGstPct(p);
     const costCells = canSeeCost
       ? '<td class="num cost-col" data-cost>' + fmt((p.final_c2e || 0) * ln.qty) + '</td><td class="num cost-col mcell" data-cost></td>'
       : '<td class="num cost-col hide" data-cost></td><td class="num cost-col mcell hide" data-cost></td>';
-    tr.innerHTML = '<td><span style="cursor:pointer" title="View details" onclick="showProductDetail(' + p.id + ')">' + prodImg(p, "sm") + "</span></td>" +
-      '<td class="pname"><b>' + p.name + "</b><br><small>" + (p.model_no || "") +
-      '</small></td><td class="num">' + fmt(p.client_unit_price) +
-      '</td><td class="num"><input type="number" min="1" value="' + ln.qty + '" ' + dis + ' onchange="upd(' + idx + ",'qty',this.value)\"></td>" +
-      '<td class="num"><input type="number" min="0" max="100" value="' + ln.disc + '" ' + dis + ' onchange="upd(' + idx + ",'disc',this.value)\"></td>" +
+    const areaTag = p.area_category ? '<br><small class="muted">' + esc(p.area_category) + "</small>" : "";
+    tr.innerHTML = '<td class="num">' + (idx + 1) + "</td>" +
+      '<td><span style="cursor:pointer" title="View details" onclick="showProductDetail(' + p.id + ')">' + prodImg(p, "sm") + "</span></td>" +
+      '<td class="pname"><b>' + p.name + "</b><br><small>" + (p.model_no || "") + "</small>" + areaTag +
+      '</td><td class="num">' + fmt(p.unit_price) +
+      '</td><td class="num"><input type="number" min="0" max="100" value="' + ln.disc + '" ' + dis + ' onchange="upd(' + idx + ",'disc',this.value)\"></td>" +
+      '<td class="num dupcell"></td>' +
+      '<td class="num"><input type="number" min="1" value="' + ln.qty + '" ' + dis + ' onchange="upd(' + idx + ",'qty',this.value)\"></td>" +
       '<td class="num"><small>' + (p.hsn_code || "—") + '</small></td>' +
-      '<td class="num">' + gp + '%</td><td class="num gstcell"></td>' +
-      costCells + '<td class="num amtcell"></td><td><button class="del" ' + dis + ' onclick="removeItem(' + idx + ')">✕</button></td>';
+      '<td class="num amtcell"></td>' + costCells +
+      '<td><button class="del" ' + dis + ' onclick="removeItem(' + idx + ')">✕</button></td>';
     b.appendChild(tr);
   });
 }
@@ -426,43 +483,94 @@ function upd(idx, field, val) {
     toast("Discount exceeds the " + SETTINGS.max_discount_pct + "% policy — this quote will need manager approval to send.");
   }
   LINES[idx][field] = v;
+  syncOverallDisc();
   recalc();
 }
 
+// ---- Overall discount: % and amount are two views of one figure ----
+// Typing in either box derives the other, so the user can work in whichever
+// they think in. The amount is what gets sent (it's unambiguous server-side).
+function overallDiscBase() {
+  return LINES.reduce((s, ln) => {
+    const p = prod(ln.pid);
+    return p ? s + p.unit_price * ln.qty * (1 - ln.disc / 100) : s;
+  }, 0);
+}
+function onOverallDiscPct() {
+  const base = overallDiscBase();
+  const pct = parseFloat($("aOverallPct").value);
+  $("aOverallAmt").value = isNaN(pct) || !base ? "" : Math.round(base * pct / 100);
+  recalc();
+}
+function onOverallDiscAmt() {
+  const base = overallDiscBase();
+  const amt = parseFloat($("aOverallAmt").value);
+  $("aOverallPct").value = isNaN(amt) || !base ? "" : (amt / base * 100).toFixed(2).replace(/\.?0+$/, "");
+  recalc();
+}
+// Re-derive the amount from the % after the line items change, so a percentage
+// the user entered earlier still means that percentage of the new subtotal.
+function syncOverallDisc() {
+  if ($("aOverallPct").value.trim() !== "") onOverallDiscPct();
+}
+
 // ---- Recalc (instant client-side preview; server is authoritative on save) ----
-// Mirrors the backend pricing engine: goods GST per line at the product/default
-// rate, add-ons taxed at the default rate, split CGST/SGST (intra-state) or IGST.
+// Mirrors the backend pricing engine: line net off the LIST unit price, the
+// quote-level overall discount scaling goods/installation/GST, installation
+// charged per line at its work-area rate, add-ons taxed at the default rate,
+// split CGST/SGST (intra-state) or IGST.
 function recalc() {
   let sub = 0, gross = 0, cost = 0, goodsGst = 0;
   const gstDefault = parseFloat($("qGst") && $("qGst").value) || 0;
   const rows = document.querySelectorAll("#itemsBody tr");
+  const nets = [];
   LINES.forEach((ln, idx) => {
-    const p = prod(ln.pid); if (!p) return;
-    const lineGross = p.client_unit_price * ln.qty;
-    const lineNet = lineGross * (1 - ln.disc / 100);
+    const p = prod(ln.pid); if (!p) { nets.push(0); return; }
+    const lineGross = p.unit_price * ln.qty;
+    const discUnit = p.unit_price * (1 - ln.disc / 100);
+    const lineNet = discUnit * ln.qty;
     const lineCost = (p.final_c2e || 0) * ln.qty;
-    const gp = lineGstPct(p);
-    const gstAmt = lineNet * gp / 100;
+    const gstAmt = lineNet * lineGstPct(p) / 100;
+    nets.push(lineNet);
     sub += lineNet; gross += lineGross; cost += lineCost; goodsGst += gstAmt;
     if (rows[idx]) {
+      const dc = rows[idx].querySelector(".dupcell"); if (dc) dc.textContent = fmt(discUnit);
       const ac = rows[idx].querySelector(".amtcell"); if (ac) ac.textContent = fmt(lineNet);
-      const gc = rows[idx].querySelector(".gstcell"); if (gc) gc.textContent = fmt(gstAmt);
       const mc = rows[idx].querySelector(".mcell");
       if (mc && canSeeCost) { const m = lineNet - lineCost; const mp = lineNet > 0 ? (m / lineNet * 100) : 0; mc.innerHTML = '<span class="' + (m >= 0 ? "mpos" : "mneg") + '">' + fmt(m) + " · " + mp.toFixed(0) + "%</span>"; }
     }
   });
   const discGiven = gross - sub;
-  const instPct = parseFloat($("aInstallPct").value) || 0;
+  // Overall discount (amount is authoritative; clamped to the subtotal).
+  const overallRaw = parseFloat($("aOverallAmt").value) || 0;
+  const overall = Math.min(Math.max(overallRaw, 0), sub);
+  const goodsNet = sub - overall;
+  const factor = sub > 0 ? goodsNet / sub : 1;
+  goodsGst *= factor;
+
+  // Installation per line, at the rate for that product's work area.
+  let instDry = 0, instWet = 0, instOther = 0;
+  LINES.forEach((ln, idx) => {
+    const p = prod(ln.pid); if (!p) return;
+    const base = nets[idx] * factor;
+    const area = p.area_category;
+    if (area === "Dry Area") instDry += base * INSTALL_RATES.dry / 100;
+    else if (area === "Wet Area") instWet += base * INSTALL_RATES.wet / 100;
+    else instOther += base * INSTALL_RATES.other / 100;
+  });
   const instOverride = $("aInstallAmt").value.trim();
+  const usingOverride = instOverride !== "";
+  if (!$("aInstall").checked || usingOverride) instDry = instWet = instOther = 0;
   const install = !$("aInstall").checked ? 0
-    : (instOverride !== "" ? (parseFloat(instOverride) || 0) : sub * instPct / 100);
+    : (usingOverride ? (parseFloat(instOverride) || 0) : instDry + instWet + instOther);
+
   const pack = parseFloat($("aPack").value) || 0;
   const localF = parseFloat($("aLocalFreight").value) || 0;
   const intlF = parseFloat($("aIntlFreight").value) || 0;
   const imp = parseFloat($("aImport").value) || 0;
   const freight = localF + intlF + imp;
   const addonBase = install + pack + freight;
-  const grand = sub + addonBase;                 // pre-tax
+  const grand = goodsNet + addonBase;             // pre-tax
   const taxable = grand;                          // GST base = goods + install + freight
   const gstTotal = goodsGst + addonBase * gstDefault / 100;
   const intra = ($("qPos").value || "") === (SETTINGS.home_state || "27");
@@ -473,7 +581,16 @@ function recalc() {
 
   $("sSub").textContent = fmt(sub);
   $("sDisc").textContent = "– " + fmt(discGiven);
+  $("sOverall").textContent = "– " + fmt(overall);
+  $("sGoodsNet").textContent = fmt(goodsNet);
   $("sInstall").textContent = fmt(install);
+  $("sInstDry").textContent = fmt(instDry);
+  $("sInstWet").textContent = fmt(instWet);
+  $("sInstOther").textContent = fmt(instOther);
+  // Only show a breakdown row that's actually carrying a charge.
+  $("rowInstDry").classList.toggle("hide", !instDry);
+  $("rowInstWet").classList.toggle("hide", !instWet);
+  $("rowInstOther").classList.toggle("hide", !instOther);
   $("sTaxable").textContent = fmt(taxable);
   $("sGrand").textContent = fmt(grand);
   $("sFinal").textContent = fmt(finalPayable);
@@ -484,15 +601,15 @@ function recalc() {
   $("sSgst").textContent = fmt(sgst);
   $("sIgst").textContent = fmt(igst);
   if (canSeeCost) {
-    const totMargin = sub - cost;
+    const totMargin = goodsNet - cost;
     $("mCost").textContent = fmt(cost);
     $("mMargin").textContent = fmt(totMargin);
-    $("mPct").textContent = (sub > 0 ? (totMargin / sub * 100) : 0).toFixed(1) + "%";
+    $("mPct").textContent = (goodsNet > 0 ? (totMargin / goodsNet * 100) : 0).toFixed(1) + "%";
   }
-  const overallDisc = gross > 0 ? (discGiven / gross * 100) : 0;
+  const effectiveDisc = gross > 0 ? ((discGiven + overall) / gross * 100) : 0;
   const anyHigh = LINES.some((l) => l.disc > 15 || (!canSeeCost && l.disc > SETTINGS.max_discount_pct));
-  $("approvalBox").classList.toggle("hide", !(overallDisc > 12 || anyHigh));
-  window._Q = { sub, install, pack, freight, grand, taxable, gstTotal,
+  $("approvalBox").classList.toggle("hide", !(effectiveDisc > 12 || anyHigh));
+  window._Q = { sub, overall, goodsNet, install, pack, freight, grand, taxable, gstTotal,
                 cgst, sgst, igst, intra, finalPayable };
 }
 
@@ -514,9 +631,13 @@ async function saveQuote() {
       currency: cur(),
       terms_template_id: parseInt($("qTerms").value, 10) || null,
       install_enabled: $("aInstall").checked,
-      install_pct: (parseFloat($("aInstallPct").value) || 0) / 100,
+      install_pct: INSTALL_RATES.other / 100,
+      install_dry_pct: INSTALL_RATES.dry / 100,
+      install_wet_pct: INSTALL_RATES.wet / 100,
       install_amount: $("aInstallAmt").value.trim() !== "" ? (parseFloat($("aInstallAmt").value) || 0) : null,
       packaging: parseFloat($("aPack").value) || 0,
+      overall_disc_pct: parseFloat($("aOverallPct").value) || 0,
+      overall_disc_amount: $("aOverallAmt").value.trim() !== "" ? (parseFloat($("aOverallAmt").value) || 0) : null,
       local_freight: parseFloat($("aLocalFreight").value) || 0,
       intl_freight: parseFloat($("aIntlFreight").value) || 0,
       import_charge: parseFloat($("aImport").value) || 0,
@@ -560,13 +681,18 @@ function renderPreview() {
     $("pvDate").textContent = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
     lastPreview.lines.forEach((ln, i) => {
       const tr = document.createElement("tr");
+      const spec = ln.specification
+        ? "<br><span style='color:#7a8a99;font-size:10.5px'>" + esc(ln.specification).slice(0, 240) + "</span>" : "";
       tr.innerHTML = "<td>" + (i + 1) + "</td><td>" + ln.name + "<br><span style='color:#7a8a99;font-size:11px'>" + (ln.model_no || "") +
-        "</span></td><td class=\"num\"><small>" + (ln.hsn_code || "—") + "</small></td><td class=\"num\">" + fmt(ln.unit_price) +
-        '</td><td class="num">' + ln.qty + '</td><td class="num">' + (ln.gst_pct || 0) + '%</td><td class="num">' + fmt(ln.line_net) + "</td>";
+        "</span>" + spec + '</td><td class="num">' + fmt(ln.unit_price) +
+        '</td><td class="num">' + (ln.line_disc || 0) + '%</td><td class="num">' + fmt(ln.discounted_unit_price) +
+        '</td><td class="num">' + ln.qty + "</td><td class=\"num\"><small>" + (ln.hsn_code || "—") +
+        '</small></td><td class="num">' + fmt(ln.line_net) + "</td>";
       b.appendChild(tr);
     });
     const t = lastPreview.totals;
     $("pvSub").textContent = fmt(t.subtotal_net);
+    setPreviewOverall(t.overall_discount);
     $("pvInstall").textContent = fmt(t.installation);
     $("pvPack").textContent = fmt(lastPreview.packaging || 0);
     $("pvFreight").textContent = fmt(lastPreview.freight || 0);
@@ -585,16 +711,22 @@ function renderPreview() {
     $("pvDate").textContent = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
     LINES.forEach((ln, i) => {
       const p = prod(ln.pid); if (!p) return;
-      const net = p.client_unit_price * ln.qty * (1 - ln.disc / 100);
+      const discUnit = p.unit_price * (1 - ln.disc / 100);
+      const net = discUnit * ln.qty;
+      const spec = p.description
+        ? "<br><span style='color:#7a8a99;font-size:10.5px'>" + esc(p.description).slice(0, 240) + "</span>" : "";
       const tr = document.createElement("tr");
       tr.innerHTML = "<td>" + (i + 1) + '</td><td><div class="cli-thumb">' + prodImg(p, "sm") +
         "<div><b style='color:var(--navy)'>" + p.name + "</b><br><span style='color:#7a8a99;font-size:11px'>" + (p.model_no || "") +
-        "</span></div></div></td><td class=\"num\"><small>" + (p.hsn_code || "—") + "</small></td><td class=\"num\">" + fmt(p.client_unit_price) +
-        '</td><td class="num">' + ln.qty + '</td><td class="num">' + lineGstPct(p) + '%</td><td class="num">' + fmt(net) + "</td>";
+        "</span>" + spec + '</div></div></td><td class="num">' + fmt(p.unit_price) +
+        '</td><td class="num">' + ln.disc + '%</td><td class="num">' + fmt(discUnit) +
+        '</td><td class="num">' + ln.qty + "</td><td class=\"num\"><small>" + (p.hsn_code || "—") +
+        '</small></td><td class="num">' + fmt(net) + "</td>";
       b.appendChild(tr);
     });
     const Q = window._Q || {};
     $("pvSub").textContent = fmt(Q.sub || 0);
+    setPreviewOverall(Q.overall || 0);
     $("pvInstall").textContent = fmt(Q.install || 0);
     $("pvPack").textContent = fmt(Q.pack || 0);
     $("pvFreight").textContent = fmt(Q.freight || 0);
@@ -606,6 +738,32 @@ function renderPreview() {
     $("emailBtn").disabled = false;
     $("waBtn").disabled = false;
   }
+}
+function setPreviewOverall(amount) {
+  $("pvRowOverall").classList.toggle("hide", !amount);
+  $("pvOverall").textContent = "– " + fmt(amount || 0);
+}
+// ---- Quotation history: the original plus every revision raised against it ----
+async function renderHistory() {
+  const card = $("historyCard");
+  if (!currentQuoteId) { card.classList.add("hide"); return; }
+  try {
+    const h = await API.quoteHistory(currentQuoteId);
+    // Only worth showing once a revision exists — a lone original is just noise.
+    if (h.quotes.length < 2) { card.classList.add("hide"); return; }
+    $("historyRows").innerHTML = h.quotes.map((q) => {
+      const isCurrent = q.id === h.current_quote_id;
+      const date = q.date ? new Date(q.date).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—";
+      const parent = q.is_original ? "" : ' <small class="muted">(revised from ' +
+        esc((h.quotes.find((x) => x.id === q.revision_of) || {}).quote_no || "—") + ")</small>";
+      return '<tr style="cursor:pointer" onclick="openQuote(' + q.id + ')" title="Open ' + esc(q.quote_no) + '">' +
+        "<td><b>" + esc(q.label) + "</b>" + (isCurrent ? ' <span class="badge int">viewing</span>' : "") + "</td>" +
+        "<td>" + esc(q.quote_no) + parent + "</td><td>" + date +
+        '</td><td><span class="st ' + q.status + '">' + q.status.charAt(0).toUpperCase() + q.status.slice(1) + "</span></td>" +
+        '<td class="num">₹ ' + Math.round(q.final_payable).toLocaleString("en-IN") + "</td></tr>";
+    }).join("");
+    card.classList.remove("hide");
+  } catch (e) { card.classList.add("hide"); }
 }
 function setPreviewTax(intra, cgst, sgst, igst) {
   $("pvRowCgst").classList.toggle("hide", !intra);
@@ -647,33 +805,51 @@ async function whatsappCurrent() {
     toast("WhatsApp opened for " + r.phone);
   } catch (e) { toast("WhatsApp failed: " + e.message, true); }
 }
+// A quote's revision position, for the builder subtitle — "R2 of EVAVO/.../0045".
+function revisionLabel(q) {
+  return q.revision_no ? "Revision " + q.revision_no + " of " + q.root_quote_no : "Original";
+}
+// Load a saved quote's fields into the Quote Builder. Shared by Open and Revise.
+function applyQuoteToBuilder(q) {
+  currentQuoteId = q.id;
+  currentQuoteStatus = q.status;
+  LINES = q.lines.map((l) => ({ pid: l.product_id, qty: l.qty, disc: l.line_disc }));
+  $("qCustomer").value = q.customer_name || "";
+  $("qEmail").value = q.customer_email || "";
+  $("qAddress").value = q.customer_address || "";
+  $("qMobile").value = q.customer_mobile || "";
+  $("qLead").value = ""; $("qLeadInfo").textContent = ""; selectedClientId = null;
+  if (q.terms_template_id != null) $("qTerms").value = q.terms_template_id;
+  if (q.currency && $("curSel").querySelector('option[value="' + q.currency + '"]')) $("curSel").value = q.currency;
+  // Restore GST / add-on / freight fields. Installation rates come from the
+  // quote's own snapshot, not current Settings, so an old quote keeps its
+  // numbers even after an admin re-tunes the dry/wet percentages.
+  $("aInstall").checked = q.install_enabled !== false;
+  INSTALL_RATES = {
+    dry: pctOf(q.install_dry_pct != null ? q.install_dry_pct : q.install_pct),
+    wet: pctOf(q.install_wet_pct != null ? q.install_wet_pct : q.install_pct),
+    other: pctOf(q.install_pct),
+  };
+  showInstallRates();
+  $("aInstallAmt").value = q.install_amount != null ? q.install_amount : "";
+  $("aOverallPct").value = q.overall_disc_pct || "";
+  $("aOverallAmt").value = q.overall_disc_amount != null ? q.overall_disc_amount : "";
+  $("aPack").value = q.packaging || 0;
+  $("aLocalFreight").value = q.local_freight || 0;
+  $("aIntlFreight").value = q.intl_freight || 0;
+  $("aImport").value = q.import_charge || 0;
+  $("qPos").value = q.place_of_supply || "";
+  if (q.gst_default_pct) $("qGst").value = q.gst_default_pct;
+  applyLockState();
+  renderItems(); recalc(); updateCart();
+}
 async function openQuote(id) {
   try {
     const q = await API.getQuote(id);
     lastPreview = await API.previewQuote(id);
-    currentQuoteId = q.id;
-    currentQuoteStatus = q.status;
-    LINES = q.lines.map((l) => ({ pid: l.product_id, qty: l.qty, disc: l.line_disc }));
-    $("qCustomer").value = q.customer_name || "";
-    $("qEmail").value = q.customer_email || "";
-    $("qAddress").value = q.customer_address || "";
-    $("qMobile").value = q.customer_mobile || "";
-    $("qLead").value = ""; $("qLeadInfo").textContent = ""; selectedClientId = null;
-    if (q.terms_template_id != null) $("qTerms").value = q.terms_template_id;
-    if (q.currency && $("curSel").querySelector('option[value="' + q.currency + '"]')) $("curSel").value = q.currency;
-    // Restore GST / add-on / freight fields
-    $("aInstall").checked = q.install_enabled !== false;
-    $("aInstallPct").value = ((q.install_pct || 0.105) * 100).toFixed(1).replace(/\.0$/, "");
-    $("aInstallAmt").value = q.install_amount != null ? q.install_amount : "";
-    $("aPack").value = q.packaging || 0;
-    $("aLocalFreight").value = q.local_freight || 0;
-    $("aIntlFreight").value = q.intl_freight || 0;
-    $("aImport").value = q.import_charge || 0;
-    $("qPos").value = q.place_of_supply || "";
-    if (q.gst_default_pct) $("qGst").value = q.gst_default_pct;
-    $("builderSub").textContent = q.quote_no + " · " + q.status.charAt(0).toUpperCase() + q.status.slice(1);
-    applyLockState();
-    renderItems(); recalc(); updateCart();
+    applyQuoteToBuilder(q);
+    $("builderSub").textContent = q.quote_no + " · " + revisionLabel(q) +
+      " · " + q.status.charAt(0).toUpperCase() + q.status.slice(1);
     goto("preview");
     toast("Opened " + q.quote_no);
   } catch (e) { toast("Open failed: " + e.message, true); }
@@ -682,12 +858,10 @@ async function reviseCurrent() {
   if (!requireSaved()) return;
   try {
     const rev = await API.reviseQuote(currentQuoteId);
-    currentQuoteId = rev.id; currentQuoteStatus = rev.status; lastPreview = null;
-    LINES = rev.lines.map((l) => ({ pid: l.product_id, qty: l.qty, disc: l.line_disc }));
-    $("builderSub").textContent = rev.quote_no + " · Revision draft";
-    applyLockState();
-    renderItems(); recalc(); updateCart();
-    toast("Created revision " + rev.quote_no);
+    lastPreview = null;
+    applyQuoteToBuilder(rev);
+    $("builderSub").textContent = rev.quote_no + " · " + revisionLabel(rev) + " · Draft";
+    toast("Created revision " + rev.quote_no + " of " + rev.root_quote_no);
     goto("builder");
   } catch (e) { toast("Revise failed: " + e.message, true); }
 }
@@ -698,6 +872,10 @@ async function reviseCurrent() {
 // auto-derived server-side from its Project). Each list reuses an inline
 // Add/Edit form (editing*Id tracks which row, if any, is being edited).
 const esc = (s) => (s == null ? "" : String(s).replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m])));
+// ISO date (yyyy-mm-dd) as dd Mmm yyyy for list display; blank stays a dash.
+const fmtDate = (iso) => (iso ? new Date(iso).toLocaleDateString("en-GB",
+  { day: "2-digit", month: "short", year: "numeric" }) : "—");
+const clip = (s, n) => (!s ? "" : (s.length > n ? s.slice(0, n) + "…" : s));
 
 // --- Clients ---
 let editingClientId = null;
@@ -709,7 +887,7 @@ async function renderClientsMaster() {
     const editing = editingClientId != null;
     c.innerHTML =
       '<div class="card pad" style="margin-bottom:16px"><div class="section-title">' + (editing ? "Edit Client" : "Add Client") + '</div><div class="f2">' +
-      '<div class="field"><label>Name</label><input id="ncName"></div>' +
+      '<div class="field"><label>Company Name</label><input id="ncName"></div>' +
       '<div class="field"><label>Email</label><input id="ncEmail"></div>' +
       '<div class="field"><label>Phone</label><input id="ncPhone"></div>' +
       '<div class="field"><label>Mobile (WhatsApp)</label><input id="ncMobile"></div>' +
@@ -717,7 +895,7 @@ async function renderClientsMaster() {
       '<button class="btn primary sm" onclick="saveClient()">' + (editing ? "💾 Update Client" : "＋ Add Client") + "</button>" +
       (editing ? ' <button class="btn ghost sm" onclick="cancelClientEdit()">Cancel</button>' : "") + "</div>" +
       '<div class="card pad"><div class="section-title">Clients (' + rows.length + ')</div>' +
-      '<table class="tbl"><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Mobile</th><th>City</th><th></th>' +
+      '<table class="tbl"><thead><tr><th>Company Name</th><th>Email</th><th>Phone</th><th>Mobile</th><th>City</th><th></th>' +
       (canSeeCost ? "<th></th>" : "") + "</tr></thead><tbody>" +
       (rows.length ? rows.map((r) => "<tr><td>" + esc(r.name) + "</td><td>" + esc(r.email) + "</td><td>" + esc(r.phone) + "</td><td>" + esc(r.mobile) + "</td><td>" + esc(r.city) +
         '</td><td><button class="btn ghost sm" onclick="editClient(' + r.id + ')">Edit</button></td>' +
@@ -731,7 +909,7 @@ async function renderClientsMaster() {
 }
 async function saveClient() {
   const name = $("ncName").value.trim();
-  if (!name) { toast("Client name is required.", true); return; }
+  if (!name) { toast("Company name is required.", true); return; }
   const data = { name, email: $("ncEmail").value.trim() || null, phone: $("ncPhone").value.trim() || null, mobile: $("ncMobile").value.trim() || null, city: $("ncCity").value.trim() || null };
   try {
     if (editingClientId != null) { await API.updateClient(editingClientId, data); toast("Client updated."); editingClientId = null; }
@@ -758,13 +936,13 @@ async function renderProjectsMaster() {
     const clientOptions = clients.map((cl) => '<option value="' + cl.id + '">' + esc(cl.name) + "</option>").join("");
     c.innerHTML =
       '<div class="card pad" style="margin-bottom:16px"><div class="section-title">' + (editing ? "Edit Project" : "Add Project") + '</div><div class="f2">' +
-      '<div class="field"><label>Client</label><select id="npClient"><option value="">Select a client…</option>' + clientOptions + "</select></div>" +
+      '<div class="field"><label>Company Name</label><select id="npClient"><option value="">Select a company…</option>' + clientOptions + "</select></div>" +
       '<div class="field"><label>Project Name</label><input id="npName"></div>' +
       '<div class="field"><label>City</label><input id="npCity"></div></div>' +
       '<button class="btn primary sm" onclick="saveProject()">' + (editing ? "💾 Update Project" : "＋ Add Project") + "</button>" +
       (editing ? ' <button class="btn ghost sm" onclick="cancelProjectEdit()">Cancel</button>' : "") + "</div>" +
       '<div class="card pad"><div class="section-title">Projects (' + rows.length + ')</div>' +
-      '<table class="tbl"><thead><tr><th>Client</th><th>Project</th><th>City</th><th></th>' +
+      '<table class="tbl"><thead><tr><th>Company Name</th><th>Project</th><th>City</th><th></th>' +
       (canSeeCost ? "<th></th>" : "") + "</tr></thead><tbody>" +
       (rows.length ? rows.map((r) => "<tr><td>" + esc(clientName(r.client_id)) + "</td><td>" + esc(r.name) + "</td><td>" + esc(r.city) +
         '</td><td><button class="btn ghost sm" onclick="editProject(' + r.id + ')">Edit</button></td>' +
@@ -780,7 +958,7 @@ async function saveProject() {
   const name = $("npName").value.trim();
   const clientId = parseInt($("npClient").value, 10);
   if (!name) { toast("Project name is required.", true); return; }
-  if (!clientId) { toast("Select a client.", true); return; }
+  if (!clientId) { toast("Select a company.", true); return; }
   const data = { name, client_id: clientId, city: $("npCity").value.trim() || null };
   try {
     if (editingProjectId != null) { await API.updateProject(editingProjectId, data); toast("Project updated."); editingProjectId = null; }
@@ -820,30 +998,38 @@ async function renderLeadsMaster() {
     const projectOptions = projects.map((p) => '<option value="' + p.id + '">' + esc(p.name) + "</option>").join("");
     c.innerHTML =
       '<div class="card pad" style="margin-bottom:16px"><div class="section-title">' + (editing ? "Edit Lead" : "Add Lead") + '</div><div class="f2">' +
+      '<div class="field"><label>Lead Received Date</label><input id="nlReceived" type="date"></div>' +
       '<div class="field"><label>Project</label><select id="nlProject" onchange="updateLeadClientLabel()"><option value="">Select a project…</option>' + projectOptions + "</select></div>" +
-      '<div class="field"><label>Client</label><input id="nlClient" disabled value="—"></div>' +
-      '<div class="field"><label>Name</label><input id="nlName"></div>' +
-      '<div class="field"><label>Owner</label><input id="nlOwner"></div>' +
+      '<div class="field"><label>Company Name</label><input id="nlClient" disabled value="—"></div>' +
+      '<div class="field"><label>Client Name</label><input id="nlName" placeholder="Contact person"></div>' +
+      '<div class="field"><label>Mobile Number</label><input id="nlWhatsapp" placeholder="Also used for WhatsApp"></div>' +
+      '<div class="field"><label>Email ID</label><input id="nlEmail" type="email"></div>' +
+      '<div class="field"><label>Sales Person Name / Handled By</label><input id="nlOwner"></div>' +
       '<div class="field"><label>Stage</label><select id="nlStage"><option value="0">Leads</option><option value="1">Quoted</option><option value="2">Negotiation</option><option value="3">Won</option></select></div>' +
-      '<div class="field"><label>Amount (₹)</label><input id="nlAmount" type="number" value="0"></div>' +
-      '<div class="field" style="grid-column:1/-1"><label>Address (site/installation — may differ from the client\'s registered address)</label><textarea id="nlAddress" rows="2"></textarea></div>' +
-      '<div class="field" style="grid-column:1/-1"><label>WhatsApp number (site contact — may differ from the client\'s registered mobile)</label><input id="nlWhatsapp"></div></div>' +
+      '<div class="field" style="grid-column:1/-1"><label>Requirement</label><textarea id="nlRequirement" rows="2" placeholder="What the customer is asking for"></textarea></div>' +
+      '<div class="field" style="grid-column:1/-1"><label>Address (site/installation — may differ from the company\'s registered address)</label><textarea id="nlAddress" rows="2"></textarea></div></div>' +
       '<button class="btn primary sm" onclick="saveLead()">' + (editing ? "💾 Update Lead" : "＋ Add Lead") + "</button>" +
       (editing ? ' <button class="btn ghost sm" onclick="cancelLeadEdit()">Cancel</button>' : "") + "</div>" +
       '<div class="card pad"><div class="section-title">Leads (' + rows.length + ')</div>' +
-      '<table class="tbl"><thead><tr><th>Project</th><th>Client</th><th>Name</th><th>Owner</th><th>Stage</th><th class="num">Amount</th><th></th>' +
+      '<table class="tbl"><thead><tr><th>Received</th><th>Project</th><th>Company Name</th><th>Client Name</th><th>Mobile</th><th>Email ID</th><th>Requirement</th><th>Handled By</th><th>Stage</th><th></th>' +
       (canSeeCost ? "<th></th>" : "") + "</tr></thead><tbody>" +
-      (rows.length ? rows.map((r) => "<tr><td>" + esc(projectName(r.project_id)) + "</td><td>" + esc(leadClientLabel(projects, clients, r.project_id)) +
-        "</td><td>" + esc(r.name) + "</td><td>" + esc(r.owner) + "</td><td>" + stageName[r.stage] +
-        '</td><td class="num">₹' + (r.amount || 0).toLocaleString("en-IN") + '</td><td><button class="btn ghost sm" onclick="editLead(' + r.id + ')">Edit</button></td>' +
+      (rows.length ? rows.map((r) => "<tr><td>" + fmtDate(r.received_date) + "</td><td>" + esc(projectName(r.project_id)) +
+        "</td><td>" + esc(leadClientLabel(projects, clients, r.project_id)) +
+        "</td><td>" + esc(r.name) + "</td><td>" + esc(r.whatsapp_number) + "</td><td>" + esc(r.email) +
+        '</td><td><span title="' + esc(r.requirement) + '">' + esc(clip(r.requirement, 40)) +
+        "</span></td><td>" + esc(r.owner) + "</td><td>" + stageName[r.stage] +
+        '</td><td><button class="btn ghost sm" onclick="editLead(' + r.id + ')">Edit</button></td>' +
         (canSeeCost ? '<td><button class="del" onclick="delLead(' + r.id + ')">✕</button></td>' : "") + "</tr>").join("")
-        : '<tr><td colspan="8"><div class="empty">No leads yet — add a project first.</div></td></tr>') + "</tbody></table></div>";
+        : '<tr><td colspan="11"><div class="empty">No leads yet — add a project first.</div></td></tr>') + "</tbody></table></div>";
     if (editing) {
       const r = rows.find((x) => x.id === editingLeadId);
       if (r) {
         $("nlProject").value = r.project_id || "";
         $("nlName").value = r.name || ""; $("nlOwner").value = r.owner || "";
-        $("nlStage").value = r.stage; $("nlAmount").value = r.amount || 0;
+        $("nlStage").value = r.stage;
+        $("nlReceived").value = r.received_date || "";
+        $("nlEmail").value = r.email || "";
+        $("nlRequirement").value = r.requirement || "";
         $("nlAddress").value = r.address || "";
         $("nlWhatsapp").value = r.whatsapp_number || "";
       }
@@ -854,9 +1040,17 @@ async function renderLeadsMaster() {
 async function saveLead() {
   const name = $("nlName").value.trim();
   const projectId = parseInt($("nlProject").value, 10);
-  if (!name) { toast("Lead name is required.", true); return; }
+  if (!name) { toast("Client name is required.", true); return; }
   if (!projectId) { toast("Select a project.", true); return; }
-  const data = { name, owner: $("nlOwner").value.trim() || null, stage: parseInt($("nlStage").value, 10), amount: parseFloat($("nlAmount").value) || 0, project_id: projectId, address: $("nlAddress").value.trim() || null, whatsapp_number: $("nlWhatsapp").value.trim() || null };
+  const data = {
+    name, owner: $("nlOwner").value.trim() || null,
+    stage: parseInt($("nlStage").value, 10), project_id: projectId,
+    received_date: $("nlReceived").value || null,
+    email: $("nlEmail").value.trim() || null,
+    requirement: $("nlRequirement").value.trim() || null,
+    address: $("nlAddress").value.trim() || null,
+    whatsapp_number: $("nlWhatsapp").value.trim() || null,
+  };
   try {
     if (editingLeadId != null) { await API.updateLead(editingLeadId, data); toast("Lead updated."); editingLeadId = null; }
     else { await API.createLead(data); toast("Lead added."); }
@@ -937,7 +1131,9 @@ async function renderSettingsMaster() {
     '<div class="card pad"><div class="section-title">Quote Builder Defaults</div><div class="f2">' +
     '<div class="field"><label>Max discount % (hard cap)' + (isAdmin ? "" : " — admin only") + '</label><input id="stMaxDisc" type="number" step="0.5" value="' + (s.max_discount_pct) + '"' + (isAdmin ? "" : " disabled") + "></div>" +
     '<div class="field"><label>Default GST %</label><input id="stGst" type="number" step="0.5" value="' + (s.gst_default_pct) + '"' + (isAdmin ? "" : " disabled") + "></div>" +
-    '<div class="field"><label>Installation % </label><input id="stInstall" type="number" step="0.5" value="' + (s.install_pct * 100) + '"' + (isAdmin ? "" : " disabled") + "></div>" +
+    '<div class="field"><label>Dry Area installation charges (%)</label><input id="stInstallDry" type="number" step="0.5" value="' + (s.install_dry_pct * 100) + '"' + (isAdmin ? "" : " disabled") + "></div>" +
+    '<div class="field"><label>Wet Area installation charges (%)</label><input id="stInstallWet" type="number" step="0.5" value="' + (s.install_wet_pct * 100) + '"' + (isAdmin ? "" : " disabled") + "></div>" +
+    '<div class="field"><label>Others / uncategorised installation (%)</label><input id="stInstall" type="number" step="0.5" value="' + (s.install_pct * 100) + '"' + (isAdmin ? "" : " disabled") + "></div>" +
     '<div class="field"><label>Home state (place of supply)</label><select id="stHome"' + (isAdmin ? "" : " disabled") + ">" + stateOpts + "</select></div>" +
     '<div class="field"><label>Local freight (default)</label><input id="stLocal" type="number" value="' + (s.local_freight) + '"' + (isAdmin ? "" : " disabled") + "></div>" +
     '<div class="field"><label>International freight (default)</label><input id="stIntl" type="number" value="' + (s.intl_freight) + '"' + (isAdmin ? "" : " disabled") + "></div>" +
@@ -953,11 +1149,14 @@ async function saveSettings() {
       max_discount_pct: parseFloat($("stMaxDisc").value) || 0,
       gst_default_pct: parseFloat($("stGst").value) || 0,
       install_pct: (parseFloat($("stInstall").value) || 0) / 100,
+      install_dry_pct: (parseFloat($("stInstallDry").value) || 0) / 100,
+      install_wet_pct: (parseFloat($("stInstallWet").value) || 0) / 100,
       local_freight: parseFloat($("stLocal").value) || 0,
       intl_freight: parseFloat($("stIntl").value) || 0,
       import_charge: parseFloat($("stImport").value) || 0,
       home_state: $("stHome").value,
     });
+    applyBuilderDefaults();   // new install rates apply to the next quote built
     toast("Settings saved.");
   } catch (e) { toast("Save failed: " + e.message, true); }
 }
@@ -1085,7 +1284,9 @@ function renderRecentQuotes(quotes) {
       ? (q.approved ? '<span class="badge cli" style="margin-left:6px">✓ Approved</span>'
                     : '<span class="badge warn" style="margin-left:6px">⏳ Pending Approval</span>')
       : "";
-    tr.innerHTML = "<td>" + q.quote_no + "</td><td>" + q.customer_name + '</td><td class="num">₹' +
+    const revTag = q.revision_no
+      ? ' <span class="badge cli" title="Revision ' + q.revision_no + " of " + esc(q.root_quote_no) + '">R' + q.revision_no + "</span>" : "";
+    tr.innerHTML = "<td>" + q.quote_no + revTag + "</td><td>" + q.customer_name + '</td><td class="num">₹' +
       Math.round(q.grand_total).toLocaleString("en-IN") + '</td><td><span class="st ' + q.status + '">' +
       q.status.charAt(0).toUpperCase() + q.status.slice(1) + "</span>" + approvalTag + "</td>";
     tr.onclick = () => openQuote(q.id);
@@ -1126,7 +1327,10 @@ function renderKanban(leads) {
     col.innerHTML = '<h3><span><span class="dotline" style="background:' + STAGE_COL[si] + '"></span>' + st + '</span><span class="cnt">' + items.length + "</span></h3>";
     items.forEach((l) => {
       const c = document.createElement("div"); c.className = "kcard";
-      c.innerHTML = "<b>" + l.name + '</b><div class="meta"><span>Owner: ' + (l.owner || "—") + '</span></div><div class="amt">₹ ' + (l.amount || 0).toLocaleString("en-IN") + "</div>";
+      // Amount is no longer captured on a lead, so only legacy rows that still
+      // carry one show a value — a "₹ 0" line would just be noise.
+      const amt = l.amount ? '<div class="amt">₹ ' + l.amount.toLocaleString("en-IN") + "</div>" : "";
+      c.innerHTML = "<b>" + esc(l.name) + '</b><div class="meta"><span>Handled by: ' + esc(l.owner || "—") + "</span></div>" + amt;
       c.onclick = () => { newQuote(); $("qLead").value = l.id; onLeadSelected(); };
       col.appendChild(c);
     });

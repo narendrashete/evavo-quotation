@@ -42,6 +42,17 @@ DEFAULT_LIST_UPLIFT = 0.10           # List price = client price * 1.10 (shows a
 DEFAULT_LOADING_FACTOR = 1.5
 DEFAULT_CLIENT_MARKUP = 2.0
 
+# A quote line's Unit Price is the *list* price, and the standard offer is that
+# price less this discount — so the Discounted Unit Price the customer pays lands
+# back at (near) the engine's client selling price. New lines start here.
+DEFAULT_LINE_DISC_PCT = 10.0
+
+# Product.area_category values that carry their own installation rate. Anything
+# else ("Others", blank, legacy rows) falls back to AddOns.install_pct.
+AREA_DRY = "Dry Area"
+AREA_WET = "Wet Area"
+AREA_OTHERS = "Others"
+
 # Approval guardrails (prototype: overall > 12% OR any single line > 15%).
 APPROVAL_OVERALL_DISC_PCT = 12.0
 APPROVAL_LINE_DISC_PCT = 15.0
@@ -126,26 +137,37 @@ def compute_line(unit_price: float, final_c2e: float, qty: float,
 
 @dataclass
 class QuoteLineInput:
-    unit_price: float       # client unit selling price (INR)
+    unit_price: float       # list unit price the discount comes off (INR)
     final_c2e: float        # unit cost (INR) — CONFIDENTIAL
     qty: float = 1.0
     line_disc: float = 0.0  # percent
     gst_pct: float = 0.0    # GST rate for this line's goods
+    area_category: str = "" # Dry Area | Wet Area | Others — picks the install rate
 
 
 @dataclass(frozen=True)
 class AddOns:
     install_enabled: bool = True
+    # `install_pct` is the fallback rate. Lines whose area_category is Dry/Wet
+    # use install_dry_pct / install_wet_pct when those are set; leaving them
+    # None means "one rate for everything", i.e. the pre-dry/wet behaviour.
     install_pct: float = DEFAULT_INSTALL_PCT
+    install_dry_pct: Optional[float] = None
+    install_wet_pct: Optional[float] = None
     packaging: float = 0.0        # flat INR
     # Freight/import breakdown (all flat INR). `freight` (kept for back-compat)
     # is the local+intl+import sum, exposed on QuoteTotals for old readers.
     local_freight: float = 0.0
     intl_freight: float = 0.0
     import_charge: float = 0.0
-    # When set, overrides `subtotal_net * install_pct` — supports an editable
-    # flat installation *charge* rather than a percentage.
+    # When set, overrides the computed per-area installation — supports an
+    # editable flat installation *charge* rather than a percentage.
     install_amount: Optional[float] = None
+    # Quote-level discount off the goods subtotal, on top of the per-line
+    # discounts. The user gives either a percentage or a flat INR amount; the
+    # amount wins when both are supplied. Clamped to the subtotal.
+    overall_disc_pct: float = 0.0
+    overall_disc_amount: Optional[float] = None
     # GST rate applied to installation + freight + import (which carry no per-line
     # HSN of their own). Also the default used when a line has no rate.
     gst_default_pct: float = 0.0
@@ -156,15 +178,20 @@ class AddOns:
 
 @dataclass(frozen=True)
 class QuoteTotals:
-    subtotal_net: float        # sum of line_net (INR)
-    discount_given: float      # gross - net (INR)
+    subtotal_net: float        # sum of line_net (INR), before the overall discount
+    discount_given: float      # gross - net, i.e. the per-line discounts (INR)
+    overall_discount: float    # quote-level discount actually applied (INR)
+    goods_net: float           # subtotal_net - overall_discount (INR)
     installation: float        # INR
+    install_dry: float         # installation charged on Dry Area lines (INR)
+    install_wet: float         # installation charged on Wet Area lines (INR)
+    install_other: float       # installation on Others/uncategorised lines (INR)
     packaging: float
     freight: float             # local + intl + import (back-compat sum)
     local_freight: float
     intl_freight: float
     import_charge: float
-    grand_total: float         # pre-tax total (subtotal + install + pack + freight)
+    grand_total: float         # pre-tax total (goods_net + install + pack + freight)
     taxable_amount: float      # base GST is charged on (goods + install + freight)
     gst_total: float           # total GST (INR)
     cgst: float                # intra-state half
@@ -172,11 +199,11 @@ class QuoteTotals:
     igst: float                # inter-state full
     is_intra_state: bool
     final_payable: float       # taxable_amount + gst_total
-    overall_disc_pct: float
+    effective_disc_pct: float  # (line discounts + overall discount) / gross
     needs_approval: bool
     # Confidential block:
     total_cost: float          # sum line_cost (INR) — CONFIDENTIAL
-    total_margin: float        # subtotal_net - total_cost — CONFIDENTIAL
+    total_margin: float        # goods_net - total_cost — CONFIDENTIAL
     margin_pct: float          # CONFIDENTIAL
 
 
@@ -189,6 +216,14 @@ def compute_quote(lines: list[QuoteLineInput], addons: Optional[AddOns] = None,
     must be stripped before any sales-role or client-facing serialization. GST
     is layered on top of the pre-tax `grand_total`; `final_payable` carries the
     tax-inclusive figure.
+
+    The quote-level ("overall") discount is applied to the goods subtotal after
+    the per-line discounts, and everything downstream — installation, the GST
+    base and the goods GST — is scaled with it, so the tax always follows the
+    price actually charged. The per-line results stay at their own line-level
+    figures (pre-overall-discount): `overall_discount` on the totals is the one
+    place that reduction lives, which is why the line `gst_amount`s can sum to
+    slightly more than `gst_total` when an overall discount is in play.
     """
     addons = addons or AddOns()
     results: list[LineResult] = []
@@ -209,17 +244,41 @@ def compute_quote(lines: list[QuoteLineInput], addons: Optional[AddOns] = None,
             any_line_over = True
 
     discount_given = gross - subtotal_net
-    if addons.install_amount is not None:
-        installation = addons.install_amount
+    if addons.overall_disc_amount is not None:
+        overall_discount = addons.overall_disc_amount
     else:
-        installation = subtotal_net * addons.install_pct if addons.install_enabled else 0.0
+        overall_discount = subtotal_net * addons.overall_disc_pct / 100.0
+    overall_discount = min(max(overall_discount, 0.0), subtotal_net)
+    goods_net = subtotal_net - overall_discount
+    # Proportional: the overall discount shrinks every line's share of the goods
+    # base equally, so installation and goods GST both follow it.
+    disc_factor = (goods_net / subtotal_net) if subtotal_net > 0 else 1.0
+    goods_gst *= disc_factor
+
+    install_dry = install_wet = install_other = 0.0
+    if addons.install_amount is not None:
+        installation = addons.install_amount   # flat override; no per-area split
+    elif not addons.install_enabled:
+        installation = 0.0
+    else:
+        dry_pct = addons.install_dry_pct if addons.install_dry_pct is not None else addons.install_pct
+        wet_pct = addons.install_wet_pct if addons.install_wet_pct is not None else addons.install_pct
+        for ln, r in zip(lines, results):
+            base = r.line_net * disc_factor
+            if ln.area_category == AREA_DRY:
+                install_dry += base * dry_pct
+            elif ln.area_category == AREA_WET:
+                install_wet += base * wet_pct
+            else:
+                install_other += base * addons.install_pct
+        installation = install_dry + install_wet + install_other
     freight = addons.local_freight + addons.intl_freight + addons.import_charge
-    grand_total = subtotal_net + installation + addons.packaging + freight
+    grand_total = goods_net + installation + addons.packaging + freight
 
     # GST: per-line rate on goods; the default rate on install + freight + import
     # (packaging is treated as part of the freight/handling base for GST too).
     addon_taxable = installation + addons.packaging + freight
-    taxable_amount = subtotal_net + addon_taxable
+    taxable_amount = goods_net + addon_taxable
     gst_total = goods_gst + addon_taxable * addons.gst_default_pct / 100.0
 
     is_intra_state = bool(addons.home_state) and addons.place_of_supply == addons.home_state
@@ -231,15 +290,22 @@ def compute_quote(lines: list[QuoteLineInput], addons: Optional[AddOns] = None,
         igst = gst_total
     final_payable = taxable_amount + gst_total
 
-    overall_disc_pct = (discount_given / gross * 100.0) if gross > 0 else 0.0
-    needs_approval = overall_disc_pct > overall_threshold or any_line_over
-    total_margin = subtotal_net - total_cost
-    margin_pct = (total_margin / subtotal_net * 100.0) if subtotal_net > 0 else 0.0
+    # Approval guardrail looks at the *total* concession off list — per-line
+    # discounts plus the quote-level one — not just the line discounts.
+    effective_disc_pct = ((discount_given + overall_discount) / gross * 100.0) if gross > 0 else 0.0
+    needs_approval = effective_disc_pct > overall_threshold or any_line_over
+    total_margin = goods_net - total_cost
+    margin_pct = (total_margin / goods_net * 100.0) if goods_net > 0 else 0.0
 
     totals = QuoteTotals(
         subtotal_net=subtotal_net,
         discount_given=discount_given,
+        overall_discount=overall_discount,
+        goods_net=goods_net,
         installation=installation,
+        install_dry=install_dry,
+        install_wet=install_wet,
+        install_other=install_other,
         packaging=addons.packaging,
         freight=freight,
         local_freight=addons.local_freight,
@@ -253,7 +319,7 @@ def compute_quote(lines: list[QuoteLineInput], addons: Optional[AddOns] = None,
         igst=igst,
         is_intra_state=is_intra_state,
         final_payable=final_payable,
-        overall_disc_pct=overall_disc_pct,
+        effective_disc_pct=effective_disc_pct,
         needs_approval=needs_approval,
         total_cost=total_cost,
         total_margin=total_margin,

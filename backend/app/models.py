@@ -60,6 +60,9 @@ class Product(Base):
     name: Mapped[str] = mapped_column(String(255), index=True)
     model_no: Mapped[str | None] = mapped_column(String(120), index=True, nullable=True)
     category: Mapped[str] = mapped_column(String(80), index=True)
+    # Work-area classification (Dry Area | Wet Area | Others) — picks which
+    # installation rate from AppSettings applies to this product's lines.
+    area_category: Mapped[str | None] = mapped_column(String(20), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     product_link: Mapped[str | None] = mapped_column(String(500), nullable=True)
     image: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -119,16 +122,26 @@ class Project(Base):
 class Lead(Base):
     __tablename__ = "leads"
     id: Mapped[int] = mapped_column(primary_key=True)
+    # Contact person on the lead ("Client Name" in the UI); the company is the
+    # linked Client row, shown as "Company Name".
     name: Mapped[str] = mapped_column(String(200))
+    # Salesperson handling the lead ("Sales Person / Handled By" in the UI).
     owner: Mapped[str | None] = mapped_column(String(120), nullable=True)
     stage: Mapped[int] = mapped_column(Integer, default=0)  # 0 Leads..3 Won
+    # No longer captured in the Lead master (the quote carries the value), but
+    # kept so historical rows and the pipeline value roll-up still read.
     amount: Mapped[float] = mapped_column(Float, default=0.0)
+    # Date the enquiry came in.
+    received_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    email: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # What the customer actually asked for, free text.
+    requirement: Mapped[str | None] = mapped_column(Text, nullable=True)
     project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id"), nullable=True)
     # Auto-derived from project.client_id on create/update — not set directly.
     client_id: Mapped[int | None] = mapped_column(ForeignKey("clients.id"), nullable=True)
     # Site/installation address — may differ from the Client's registered address.
     address: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # WhatsApp contact override — may differ from the Client's registered mobile.
+    # Mobile/WhatsApp contact — may differ from the Client's registered mobile.
     whatsapp_number: Mapped[str | None] = mapped_column(String(40), nullable=True)
 
 
@@ -157,7 +170,11 @@ class AppSettings(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     max_discount_pct: Mapped[float] = mapped_column(Float, default=12.0)   # hard cap (admin-only)
     gst_default_pct: Mapped[float] = mapped_column(Float, default=18.0)
+    # Installation rates: `install_pct` is the fallback (products categorised
+    # "Others" or not categorised at all); dry/wet apply per Product.area_category.
     install_pct: Mapped[float] = mapped_column(Float, default=0.105)
+    install_dry_pct: Mapped[float] = mapped_column(Float, default=0.105)
+    install_wet_pct: Mapped[float] = mapped_column(Float, default=0.105)
     local_freight: Mapped[float] = mapped_column(Float, default=0.0)
     intl_freight: Mapped[float] = mapped_column(Float, default=0.0)
     import_charge: Mapped[float] = mapped_column(Float, default=0.0)
@@ -184,9 +201,16 @@ class Quote(Base):
         ForeignKey("terms_templates.id"), nullable=True)
 
     install_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    install_pct: Mapped[float] = mapped_column(Float, default=0.105)
+    install_pct: Mapped[float] = mapped_column(Float, default=0.105)   # "Others" / uncategorised rate
+    install_dry_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    install_wet_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     install_amount: Mapped[float | None] = mapped_column(Float, nullable=True)  # editable flat charge
     packaging: Mapped[float] = mapped_column(Float, default=0.0)
+
+    # Quote-level ("overall") discount on the goods subtotal. The user enters
+    # either a % or a flat amount; the amount wins when both are present.
+    overall_disc_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    overall_disc_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
     freight: Mapped[float] = mapped_column(Float, default=0.0)          # local+intl+import sum (back-compat)
     local_freight: Mapped[float] = mapped_column(Float, default=0.0)
     intl_freight: Mapped[float] = mapped_column(Float, default=0.0)
@@ -212,7 +236,14 @@ class Quote(Base):
     approved_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
+    # Revision chain. `revision_of` is the immediate parent this copy was forked
+    # from; `root_quote_id` always points at the ORIGINAL quote (never at
+    # another revision) so the whole family can be fetched with one query, and
+    # `revision_no` is that revision's sequence (0 = the original itself), which
+    # is also the "-R{n}" suffix on `quote_no`.
     revision_of: Mapped[int | None] = mapped_column(ForeignKey("quotes.id"), nullable=True)
+    root_quote_id: Mapped[int | None] = mapped_column(ForeignKey("quotes.id"), nullable=True)
+    revision_no: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     lines: Mapped[list["QuoteLine"]] = relationship(
@@ -228,6 +259,10 @@ class QuoteLine(Base):
     model_no: Mapped[str | None] = mapped_column(String(120), nullable=True)
     qty: Mapped[float] = mapped_column(Float, default=1.0)
     line_disc: Mapped[float] = mapped_column(Float, default=0.0)  # percent
+    # Work area snapshot (Dry Area | Wet Area | Others) — decides which
+    # installation rate this line is charged at, so re-categorising a product
+    # later can't change an existing quote's installation total.
+    area_category: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     # GST snapshot (client-safe)
     hsn_code: Mapped[str | None] = mapped_column(String(20), nullable=True)

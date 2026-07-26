@@ -70,6 +70,24 @@ def _money(amount_inr: float, rate_to_inr: float, code: str) -> str:
     return f"{code} {v:,.0f}"
 
 
+# The core PDF fonts used here are latin-1 only, but product specifications and
+# user-typed terms routinely carry typographic punctuation and units (curly
+# quotes, en/em dashes, x, degrees...). Transliterate what we can and replace the
+# rest, so one stray character can't fail the whole document.
+_UNICODE_FALLBACKS = {
+    "–": "-", "—": "-", "‘": "'", "’": "'",
+    "“": '"', "”": '"', "•": "-", "…": "...",
+    "×": "x", "÷": "/", "→": "->", " ": " ",
+    "′": "'", "″": '"', "₹": "INR ", "™": "(TM)",
+}
+
+
+def _latin1(text: str) -> str:
+    for bad, good in _UNICODE_FALLBACKS.items():
+        text = text.replace(bad, good)
+    return text.encode("latin-1", "replace").decode("latin-1")
+
+
 def _item_text(ln: dict, max_len: int) -> str:
     """Item name + model, collapsed to a single logical line and length-capped.
 
@@ -83,7 +101,50 @@ def _item_text(ln: dict, max_len: int) -> str:
     item = " ".join((name + (f" ({model})" if model else "")).split())
     if len(item) > max_len:
         item = item[: max_len - 3] + "..."
-    return item
+    return _latin1(item)
+
+
+def _wrap_lines(pdf: FPDF, text: str, width: float, max_lines: int) -> list[str]:
+    """Greedy word-wrap `text` to `width` mm at the font currently set.
+
+    Measured with `get_string_width` rather than `multi_cell(dry_run=...)` so
+    this keeps working on the classic FPDF API. The last line is ellipsised when
+    the text doesn't fit in `max_lines`, and single words longer than the column
+    are hard-broken so they can't spill past it.
+    """
+    words = _latin1(" ".join((text or "").split())).split(" ")
+    lines: list[str] = []
+    cur = ""
+    for word in words:
+        if not word:
+            continue
+        probe = f"{cur} {word}".strip()
+        if pdf.get_string_width(probe) <= width or not cur:
+            # A lone word wider than the column: chop it at the fitting prefix.
+            while not cur and pdf.get_string_width(word) > width and len(word) > 1:
+                cut = len(word) - 1
+                while cut > 1 and pdf.get_string_width(word[:cut]) > width:
+                    cut -= 1
+                lines.append(word[:cut])
+                word = word[cut:]
+                if len(lines) >= max_lines:
+                    return lines
+            cur = f"{cur} {word}".strip()
+        else:
+            lines.append(cur)
+            cur = word
+        if len(lines) >= max_lines:
+            break
+    if cur and len(lines) < max_lines:
+        lines.append(cur)
+    # Ellipsise if anything was dropped.
+    consumed = " ".join(lines)
+    if len(consumed) < len(" ".join(words)) and lines:
+        last = lines[-1]
+        while last and pdf.get_string_width(last + "...") > width:
+            last = last[:-1]
+        lines[-1] = last + "..."
+    return lines
 
 
 def _draw_header_and_billto(pdf: FPDF, preview: dict, *, currency: str,
@@ -125,7 +186,7 @@ def _draw_header_and_billto(pdf: FPDF, preview: dict, *, currency: str,
     pdf.cell(120, 5, "BILL TO", 0, 2, "L")
     pdf.set_text_color(*NAVY)
     pdf.set_font("Helvetica", "B", 11)
-    pdf.cell(120, 6, bill_to_name or preview.get("customer_name", ""), 0, 2, "L")
+    pdf.cell(120, 6, _latin1(bill_to_name or preview.get("customer_name", "")), 0, 2, "L")
     pdf.set_font("Helvetica", "", 9)
     pdf.set_text_color(70, 88, 106)
     if bill_to_email or preview.get("customer_email"):
@@ -133,7 +194,7 @@ def _draw_header_and_billto(pdf: FPDF, preview: dict, *, currency: str,
     address = bill_to_address or preview.get("customer_address") or ""
     address_lines = [ln for ln in address.splitlines() if ln.strip()][:2]
     for ln in address_lines:
-        pdf.cell(120, 5, ln, 0, 2, "L")
+        pdf.cell(120, 5, _latin1(ln), 0, 2, "L")
     pdf.set_xy(pdf.w - 90, 42)
     pdf.set_text_color(*MUTED)
     pdf.set_font("Helvetica", "B", 8)
@@ -153,21 +214,24 @@ def _draw_totals(pdf: FPDF, preview: dict, *, rate_to_inr: float, currency: str)
     t = preview.get("totals", {})
     pdf.ln(3)
 
-    rows: list[tuple[str, float, bool]] = [
-        ("Subtotal", t.get("subtotal_net", 0), False),
-        ("Installation", t.get("installation", 0), False),
+    # (label, amount, bold, negative) — negative rows print with a leading "-".
+    rows: list[tuple[str, float, bool, bool]] = [
+        ("Subtotal", t.get("subtotal_net", 0), False, False),
     ]
+    if t.get("overall_discount"):
+        rows.append(("Overall Discount", t.get("overall_discount", 0), False, True))
+    rows.append(("Installation", t.get("installation", 0), False, False))
     if preview.get("packaging"):
-        rows.append(("Packaging", preview.get("packaging", 0), False))
+        rows.append(("Packaging", preview.get("packaging", 0), False, False))
     if preview.get("freight"):
-        rows.append(("Freight & import", preview.get("freight", 0), False))
-    rows.append(("Taxable Amount", t.get("taxable_amount", 0), False))
+        rows.append(("Freight & import", preview.get("freight", 0), False, False))
+    rows.append(("Taxable Amount", t.get("taxable_amount", 0), False, False))
     if t.get("is_intra_state"):
-        rows.append(("CGST", t.get("cgst", 0), False))
-        rows.append(("SGST", t.get("sgst", 0), False))
+        rows.append(("CGST", t.get("cgst", 0), False, False))
+        rows.append(("SGST", t.get("sgst", 0), False, False))
     elif t.get("gst_total", 0):
-        rows.append(("IGST", t.get("igst", 0), False))
-    rows.append(("Final Payable", t.get("final_payable", 0), True))
+        rows.append(("IGST", t.get("igst", 0), False, False))
+    rows.append(("Final Payable", t.get("final_payable", 0), True, False))
 
     label_w, amt_w = 45, 30
     pad = 3.5
@@ -184,7 +248,7 @@ def _draw_totals(pdf: FPDF, preview: dict, *, rate_to_inr: float, currency: str)
     pdf.rect(box_x, box_y, box_w, box_h, "DF")
 
     y = box_y + pad
-    for i, (label, amount_inr, bold) in enumerate(rows):
+    for i, (label, amount_inr, bold, negative) in enumerate(rows):
         is_final = i == len(rows) - 1
         h = final_h if is_final else row_h
         if is_final:
@@ -204,7 +268,8 @@ def _draw_totals(pdf: FPDF, preview: dict, *, rate_to_inr: float, currency: str)
         pdf.set_font("Helvetica", "B" if bold else "", 11 if is_final else 9)
         pdf.set_text_color(*(NAVY if bold else (70, 88, 106)))
         pdf.cell(label_w, h, label, 0, 0, "L")
-        pdf.cell(amt_w, h, _money(amount_inr, rate_to_inr, currency), 0, 0, "R")
+        amount = _money(amount_inr, rate_to_inr, currency)
+        pdf.cell(amt_w, h, f"- {amount}" if negative else amount, 0, 0, "R")
         y += h
 
     pdf.set_xy(pdf.l_margin, box_y + box_h + 4)
@@ -220,7 +285,7 @@ def _draw_terms(pdf: FPDF, terms_body: str) -> None:
     pdf.cell(0, 6, "Terms & Conditions", 0, 1, "L")
     pdf.set_font("Helvetica", "", 8)
     pdf.set_text_color(91, 107, 123)
-    pdf.multi_cell(0, 5, terms_body)
+    pdf.multi_cell(0, 5, _latin1(terms_body))
     pdf.ln(2)
     pdf.set_font("Helvetica", "B", 8.5)
     pdf.set_text_color(*NAVY)
@@ -350,13 +415,13 @@ class ProposalPDF(FPDF):
         self.set_x(_PROP_MARGIN)
         self.set_font("Helvetica", "B", 11)
         self.set_text_color(*NAVY)
-        self.cell(0, 6, self._bill_to_name, 0, 1, "L")
+        self.cell(0, 6, _latin1(self._bill_to_name), 0, 1, "L")
 
         self.set_font("Helvetica", "", 9)
         self.set_text_color(70, 88, 106)
         for ln in [l for l in (self._bill_to_address or "").splitlines() if l.strip()][:2]:
             self.set_x(_PROP_MARGIN)
-            self.cell(0, 5, ln, 0, 1, "L")
+            self.cell(0, 5, _latin1(ln), 0, 1, "L")
 
         contact_bits = []
         if self._bill_to_email:
@@ -365,7 +430,7 @@ class ProposalPDF(FPDF):
             contact_bits.append(f"WhatsApp: {self._bill_to_mobile}")
         if contact_bits:
             self.set_x(_PROP_MARGIN)
-            self.cell(0, 5, "   |   ".join(contact_bits), 0, 1, "L")
+            self.cell(0, 5, _latin1("   |   ".join(contact_bits)), 0, 1, "L")
         self._content_top = self.get_y() + 6
 
     def _draw_chrome_compact(self) -> None:
@@ -451,7 +516,7 @@ def _draw_cover(pdf: ProposalPDF, preview: dict, *, quote_date: str | None,
     pdf.cell(0, 8, "Proposal for:", 0, 2, "C")
     pdf.set_font("Helvetica", "B", 18)
     pdf.set_text_color(*NAVY)
-    pdf.cell(0, 11, bill_to_name or preview.get("customer_name", ""), 0, 2, "C")
+    pdf.cell(0, 11, _latin1(bill_to_name or preview.get("customer_name", "")), 0, 2, "C")
     pdf.ln(10)
     pdf.set_font("Helvetica", "", 11)
     pdf.set_text_color(70, 88, 106)
@@ -461,30 +526,41 @@ def _draw_cover(pdf: ProposalPDF, preview: dict, *, quote_date: str | None,
     pdf.cell(0, 6, f"Date: {quote_date or date.today().strftime('%d-%b-%Y')}", 0, 2, "C")
 
 
-_ROW_H = 18
+_ROW_H = 18                  # minimum row height — the product photo's footprint
+_NAME_LH = 4.2               # line height for the product name
+_SPEC_LH = 3.2               # line height for the specification text
+_SPEC_MAX_LINES = 5          # cap so one verbose product can't swallow a page
 
 
 def _draw_line_items(pdf: ProposalPDF, preview: dict, *, rate_to_inr: float,
                      currency: str) -> None:
-    """Line-item table (image + HSN + GST columns) on the box-bordered body
-    pages. Starts below the top-left logo; overflows to further body pages.
+    """Line-item table on the box-bordered body pages: photo, product name and
+    its specification, then Unit Price / Disc% / Discounted Unit Price / Qty /
+    HSN / Amount. Starts below the top-left logo; overflows to further body pages.
 
-    Auto page-break is turned off here and rows are paginated manually: fpdf's
-    mid-cell auto break would invalidate the per-row `y0` bookkeeping (the image
-    and item text are positioned by absolute y), so instead we start a fresh
-    body page whenever the next row/totals block would cross the bottom margin.
+    Rows are variable height — tall enough for the wrapped name plus the
+    product's specification lines, never shorter than the photo. Auto page-break
+    is turned off and rows are paginated manually: fpdf's mid-cell auto break
+    would invalidate the per-row `y0` bookkeeping (the image and item text are
+    positioned by absolute y), so instead we start a fresh body page whenever the
+    next row/totals block would cross the bottom margin.
+
+    GST% per line is deliberately absent — tax is presented once, in the totals
+    block, as CGST/SGST or IGST.
     """
     W = pdf.w - 2 * _PROP_MARGIN
-    cols = [(10, "#", "C"), (W - 10 - 22 - 34 - 14 - 16 - 34, "ITEM", "L"),
-            (22, "HSN", "L"), (34, "UNIT PRICE", "R"), (14, "QTY", "R"),
-            (16, "GST%", "R"), (34, "AMOUNT", "R")]
+    fixed = 8 + 17 + 25 + 12 + 25 + 10 + 27
+    cols = [(8, "#", "C"), (W - fixed, "ITEM", "L"),
+            (25, "UNIT PRICE", "R"), (12, "DISC%", "R"),
+            (25, "DISC. PRICE", "R"), (10, "QTY", "R"),
+            (17, "HSN", "L"), (27, "AMOUNT", "R")]
     bottom = pdf.h - 22
 
     def draw_col_header() -> None:
         pdf.set_xy(_PROP_MARGIN, pdf._content_top)
         pdf.set_fill_color(*HEADBG)
         pdf.set_text_color(*MUTED)
-        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_font("Helvetica", "B", 7.5)
         for w, label, align in cols:
             pdf.cell(w, 8, label, 0, 0, align, True)
         pdf.ln(8)
@@ -492,13 +568,20 @@ def _draw_line_items(pdf: ProposalPDF, preview: dict, *, rate_to_inr: float,
     pdf.set_auto_page_break(False)
     draw_col_header()
 
-    ROW_H = _ROW_H
     IMG_SIZE = 14
     PAD = 1.5
-    pdf.set_text_color(*NAVY)
-    pdf.set_draw_color(*LINE)
+    text_w = cols[1][0] - IMG_SIZE - PAD * 3
     for i, ln in enumerate(preview.get("lines", []), start=1):
-        if pdf.get_y() + ROW_H > bottom:
+        # Measure first: the row has to be tall enough for name + specification.
+        pdf.set_font("Helvetica", "", 8.5)
+        name_lines = _wrap_lines(pdf, _item_text(ln, max_len=120), text_w, 3)
+        pdf.set_font("Helvetica", "", 6.5)
+        spec_lines = _wrap_lines(pdf, (ln.get("specification") or "").replace("\n", " "),
+                                 text_w, _SPEC_MAX_LINES)
+        text_h = len(name_lines) * _NAME_LH + (len(spec_lines) * _SPEC_LH + 1 if spec_lines else 0)
+        row_h = max(_ROW_H, text_h + PAD * 2 + 1)
+
+        if pdf.get_y() + row_h > bottom:
             pdf.add_mode_page("body")
             draw_col_header()
         # reset per row: draw_col_header leaves MUTED text, and header() (on a
@@ -506,15 +589,19 @@ def _draw_line_items(pdf: ProposalPDF, preview: dict, *, rate_to_inr: float,
         pdf.set_text_color(*NAVY)
         pdf.set_draw_color(*LINE)
         y0 = pdf.get_y()
-        pdf.set_font("Helvetica", "", 9)
-        pdf.cell(cols[0][0], ROW_H, str(i), "B", 0, "C")
+        qty = ln["qty"]
+        pdf.set_font("Helvetica", "", 8.5)
+        pdf.cell(cols[0][0], row_h, str(i), "B", 0, "C")
         x_item = pdf.get_x()
-        pdf.cell(cols[1][0], ROW_H, "", "B", 0, "L")
-        pdf.cell(cols[2][0], ROW_H, str(ln.get("hsn_code") or "-"), "B", 0, "L")
-        pdf.cell(cols[3][0], ROW_H, _money(ln["unit_price"], rate_to_inr, currency), "B", 0, "R")
-        pdf.cell(cols[4][0], ROW_H, str(int(ln["qty"]) if float(ln["qty"]).is_integer() else ln["qty"]), "B", 0, "R")
-        pdf.cell(cols[5][0], ROW_H, f"{ln.get('gst_pct', 0):g}%", "B", 0, "R")
-        pdf.cell(cols[6][0], ROW_H, _money(ln["line_net"], rate_to_inr, currency), "B", 1, "R")
+        pdf.cell(cols[1][0], row_h, "", "B", 0, "L")
+        pdf.cell(cols[2][0], row_h, _money(ln["unit_price"], rate_to_inr, currency), "B", 0, "R")
+        pdf.cell(cols[3][0], row_h, f"{ln.get('line_disc', 0):g}%", "B", 0, "R")
+        pdf.cell(cols[4][0], row_h,
+                 _money(ln.get("discounted_unit_price", ln["unit_price"]), rate_to_inr, currency),
+                 "B", 0, "R")
+        pdf.cell(cols[5][0], row_h, str(int(qty) if float(qty).is_integer() else qty), "B", 0, "R")
+        pdf.cell(cols[6][0], row_h, str(ln.get("hsn_code") or "-"), "B", 0, "L")
+        pdf.cell(cols[7][0], row_h, _money(ln["line_net"], rate_to_inr, currency), "B", 1, "R")
 
         img_path = _resolve_image_path(ln.get("image"))
         if img_path:
@@ -528,15 +615,25 @@ def _draw_line_items(pdf: ProposalPDF, preview: dict, *, rate_to_inr: float,
             pdf.multi_cell(IMG_SIZE, 3, "No image", 0, "C")
 
         text_x = x_item + IMG_SIZE + PAD * 2
-        text_w = cols[1][0] - IMG_SIZE - PAD * 3
-        pdf.set_xy(text_x, y0 + PAD)
-        pdf.set_font("Helvetica", "", 9)
+        y = y0 + PAD
+        pdf.set_font("Helvetica", "", 8.5)
         pdf.set_text_color(*NAVY)
-        pdf.multi_cell(text_w, 4.2, _item_text(ln, max_len=46), 0, "L")
-        pdf.set_xy(_PROP_MARGIN, y0 + ROW_H)
+        for line in name_lines:
+            pdf.set_xy(text_x, y)
+            pdf.cell(text_w, _NAME_LH, line, 0, 0, "L")
+            y += _NAME_LH
+        if spec_lines:
+            y += 1
+            pdf.set_font("Helvetica", "", 6.5)
+            pdf.set_text_color(*MUTED)
+            for line in spec_lines:
+                pdf.set_xy(text_x, y)
+                pdf.cell(text_w, _SPEC_LH, line, 0, 0, "L")
+                y += _SPEC_LH
+        pdf.set_xy(_PROP_MARGIN, y0 + row_h)
 
     # keep the whole totals block together — new body page if it won't fit
-    if pdf.get_y() + 72 > bottom:
+    if pdf.get_y() + 78 > bottom:
         pdf.add_mode_page("body")
         pdf.set_xy(_PROP_MARGIN, pdf._content_top)
     _draw_totals(pdf, preview, rate_to_inr=rate_to_inr, currency=currency)
@@ -557,12 +654,12 @@ def _draw_terms_page(pdf: ProposalPDF, terms_body: str) -> None:
             pdf.set_x(_PROP_MARGIN)
             pdf.set_font("Helvetica", "BU", 9.5)
             pdf.set_text_color(*NAVY)
-            pdf.cell(0, 6, heading, 0, 1, "L")
+            pdf.cell(0, 6, _latin1(heading), 0, 1, "L")
         if text.strip():
             pdf.set_x(_PROP_MARGIN)
             pdf.set_font("Helvetica", "", 8.5)
             pdf.set_text_color(91, 107, 123)
-            pdf.multi_cell(pdf.w - 2 * _PROP_MARGIN, 4.6, text, 0, "L")
+            pdf.multi_cell(pdf.w - 2 * _PROP_MARGIN, 4.6, _latin1(text), 0, "L")
         pdf.ln(3)
 
 
