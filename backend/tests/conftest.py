@@ -68,3 +68,8 @@ def sales_headers(client):
 @pytest.fixture()
 def manager_headers(client):
     return {"Authorization": f"Bearer {_token(client, 'manager@evavo.test', 'manager123')}"}
+
+
+@pytest.fixture()
+def admin_headers(client):
+    return {"Authorization": f"Bearer {_token(client, 'admin@evavo.test', 'admin123')}"}

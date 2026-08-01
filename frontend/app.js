@@ -6,6 +6,7 @@
 // ---- State ----
 let currentUser = null;
 let canSeeCost = false;
+let canDelete = false;  // manager/admin, or a sales user granted delete rights by an admin
 let PRODUCTS = [];          // from /api/products (cost fields present only for managers)
 let LINES = [];             // [{pid, qty, disc}]
 let FX = { INR: 1 };        // display rate_to_inr by currency
@@ -105,6 +106,7 @@ async function boot() {
     currentUser = await API.me();
   } catch (e) { showLogin(); return; }
   canSeeCost = currentUser.role === "manager" || currentUser.role === "admin";
+  canDelete = canSeeCost || !!currentUser.can_delete;
   $("loginWrap").classList.add("hide");
   $("appRoot").classList.remove("hide");
   if (window.innerWidth <= 680) $("bnav").classList.remove("hide");
@@ -172,6 +174,7 @@ function applyRoleVisibility() {
   document.querySelectorAll("[data-cost]").forEach((e) => e.classList.toggle("hide", !canSeeCost));
   document.querySelectorAll("[data-nocost]").forEach((e) => e.classList.toggle("hide", canSeeCost));
   document.querySelectorAll("[data-admin]").forEach((e) => e.classList.toggle("hide", currentUser.role !== "admin"));
+  document.querySelectorAll("[data-delete]").forEach((e) => e.classList.toggle("hide", !canDelete));
 }
 
 // ---- Data loads ----
@@ -192,10 +195,13 @@ async function loadFx() {
   });
 }
 // Lead → Project → Client lookup for the Quote Builder's Lead selector.
+// Re-fetched on every entry into the Builder (and after Lead master edits) so
+// a lead added elsewhere shows up here without a full page refresh.
 async function loadBuilderLeads() {
   [BUILDER_LEADS, BUILDER_PROJECTS, BUILDER_CLIENTS] =
     await Promise.all([API.leads(), API.projects(), API.clients()]);
   const sel = $("qLead"); if (!sel) return;
+  const keep = sel.value;   // preserve the current selection across the rebuild
   sel.innerHTML = '<option value="">— none, enter manually —</option>';
   BUILDER_LEADS.forEach((l) => {
     const p = BUILDER_PROJECTS.find((x) => x.id === l.project_id);
@@ -203,6 +209,13 @@ async function loadBuilderLeads() {
     o.value = l.id; o.textContent = l.name + (p ? " — " + p.name : "");
     sel.appendChild(o);
   });
+  if (keep && sel.querySelector('option[value="' + keep + '"]')) sel.value = keep;
+}
+function leadInfoText(lead, project, client) {
+  return "Project: " + project.name + " · Company: " + client.name +
+    (client.city ? " · " + client.city : "") + " · GSTIN: " + (client.gstin || "—") +
+    " · Handled by: " + (lead.owner || "—") +
+    (lead.requirement ? " · Requirement: " + clip(lead.requirement, 80) : "");
 }
 function onLeadSelected() {
   const id = parseInt($("qLead").value, 10);
@@ -224,10 +237,20 @@ function onLeadSelected() {
     $("qPos").value = posFromGstin;
   }
   recalc();
-  info.textContent = "Project: " + project.name + " · Company: " + client.name +
-    (client.city ? " · " + client.city : "") + " · GSTIN: " + (client.gstin || "—") +
-    " · Handled by: " + (lead.owner || "—") +
-    (lead.requirement ? " · Requirement: " + clip(lead.requirement, 80) : "");
+  info.textContent = leadInfoText(lead, project, client);
+}
+// Re-select a quote's linked Lead in the dropdown when opening/editing it,
+// without overwriting the customer fields already restored from the quote's
+// own snapshot (the lead/client's live data may have moved on since).
+function selectLeadForBuilder(leadId) {
+  const info = $("qLeadInfo");
+  if (!leadId) { $("qLead").value = ""; info.textContent = ""; return; }
+  const lead = BUILDER_LEADS.find((l) => l.id === leadId);
+  if (!lead) { $("qLead").value = ""; info.textContent = ""; return; }
+  $("qLead").value = leadId;
+  const project = BUILDER_PROJECTS.find((p) => p.id === lead.project_id);
+  const client = project && BUILDER_CLIENTS.find((c) => c.id === project.client_id);
+  info.textContent = (project && client) ? leadInfoText(lead, project, client) : "";
 }
 function buildCurrencyOptions() {
   const sel = $("curSel"); sel.innerHTML = "";
@@ -243,6 +266,8 @@ function buildCategoryOptions() {
     sel.innerHTML = ""; if (keep) sel.appendChild(keep);
     cats.forEach((c) => { const o = document.createElement("option"); o.value = c; o.textContent = c; sel.appendChild(o); });
   });
+  const list = $("npdCategoryList");
+  if (list) list.innerHTML = cats.map((c) => '<option value="' + esc(c) + '">').join("");
 }
 
 // ---- Navigation ----
@@ -253,11 +278,23 @@ const titles = {
   termsMaster: "Terms", emailMaster: "Email Setup", settingsMaster: "Settings",
   usersMaster: "Users",
 };
+// Re-fetch products/leads/settings from the server — called whenever the user
+// enters the Builder (or opens the product picker) so a lead/product/setting
+// added or edited elsewhere shows up without a full page refresh.
+async function refreshBuilderMasters() {
+  try {
+    await Promise.all([loadProducts(), loadBuilderLeads(), loadSettings()]);
+    buildCategoryOptions();
+    renderProducts();
+    recalc();
+  } catch (e) { /* best-effort refresh; keep whatever's already loaded on failure */ }
+}
 function goto(v) {
   document.querySelectorAll(".view").forEach((s) => s.classList.toggle("active", s.id === v));
   document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === v));
   document.querySelectorAll(".bottomnav button").forEach((b) => b.classList.toggle("active", b.dataset.view === v));
   $("tbTitle").textContent = titles[v] || "";
+  if (v === "builder") refreshBuilderMasters();
   if (v === "preview") { renderPreview(); renderHistory(); }
   if (v === "clientsMaster") renderClientsMaster();
   if (v === "projectsMaster") renderProjectsMaster();
@@ -317,14 +354,66 @@ function renderProducts() {
         '</b><div class="pmodel">' + (p.model_no || "") + '</div><div class="prow"><span>Unit price</span><span class="price">₹ ' +
         Math.round(p.unit_price).toLocaleString("en-IN") + "</span></div>" +
         '<div class="prow"><span>Discounted unit price</span><span class="price">₹ ' +
-        Math.round(p.discounted_unit_price).toLocaleString("en-IN") + "</span></div>" + costRow;
+        Math.round(p.discounted_unit_price).toLocaleString("en-IN") + "</span></div>" + costRow +
+        (canDelete ? '<div class="prow" style="border-top:0;padding-top:0;justify-content:flex-end"><button class="del" onclick="event.stopPropagation();delProduct(' +
+          p.id + ')" title="Delete product">✕</button></div>' : "");
       g.appendChild(d);
     });
   if (!g.children.length) g.innerHTML = '<div class="empty">No products match.</div>';
 }
+function toggleAddProduct() {
+  const card = $("addProductCard");
+  card.classList.toggle("hide");
+  if (!card.classList.contains("hide")) {
+    ["npdName", "npdModel", "npdCategory", "npdHsn", "npdGst", "npdSpec"].forEach((id) => $(id).value = "");
+    $("npdArea").value = "";
+    $("npdSourcePrice").value = 0; $("npdLoading").value = 1.5;
+    $("npdMarkup").value = 2.0; $("npdUplift").value = 10;
+  }
+}
+async function saveNewProduct() {
+  const name = $("npdName").value.trim();
+  const category = $("npdCategory").value.trim();
+  if (!name) { toast("Product name is required.", true); return; }
+  if (!category) { toast("Category is required.", true); return; }
+  const gstRaw = $("npdGst").value.trim();
+  const data = {
+    name, model_no: $("npdModel").value.trim() || null, category,
+    area_category: $("npdArea").value || null,
+    hsn_code: $("npdHsn").value.trim() || null,
+    gst_pct: gstRaw !== "" ? parseFloat(gstRaw) : null,
+    source_price_inr: parseFloat($("npdSourcePrice").value) || 0,
+    loading_factor: parseFloat($("npdLoading").value) || 1.5,
+    client_markup: parseFloat($("npdMarkup").value) || 2.0,
+    list_uplift: (parseFloat($("npdUplift").value) || 0) / 100,
+    description: $("npdSpec").value.trim() || null,
+  };
+  try {
+    await API.createProduct(data);
+    toast("Product added.");
+    toggleAddProduct();
+    await loadProducts();
+    buildCategoryOptions();
+    renderProducts();
+  } catch (e) { toast("Save failed: " + e.message, true); }
+}
+async function delProduct(id) {
+  try {
+    await API.deleteProduct(id);
+    toast("Product deleted.");
+    await loadProducts();
+    buildCategoryOptions();
+    renderProducts();
+  } catch (e) { toast("Delete failed: " + e.message, true); }
+}
 
 // ---- Picker ----
-function openPicker() { $("picker").classList.add("open"); renderPicker(); }
+function openPicker() {
+  $("picker").classList.add("open"); renderPicker();
+  // Refresh in the background so a product added/edited elsewhere while this
+  // quote was being built shows up without reopening the picker.
+  loadProducts().then(() => { buildCategoryOptions(); renderPicker(); renderProducts(); });
+}
 function closePicker() { $("picker").classList.remove("open"); }
 // Add/remove button for a product, rendered from its current cart membership so
 // the picker, re-opens and live filtering all show a consistent state.
@@ -609,8 +698,11 @@ function recalc() {
   const effectiveDisc = gross > 0 ? ((discGiven + overall) / gross * 100) : 0;
   const anyHigh = LINES.some((l) => l.disc > 15 || (!canSeeCost && l.disc > SETTINGS.max_discount_pct));
   $("approvalBox").classList.toggle("hide", !(effectiveDisc > 12 || anyHigh));
-  window._Q = { sub, overall, goodsNet, install, pack, freight, grand, taxable, gstTotal,
-                cgst, sgst, igst, intra, finalPayable };
+  const overallPct = sub > 0 ? (overall / sub * 100) : 0;
+  const installPct = goodsNet > 0 ? (install / goodsNet * 100) : 0;
+  window._Q = { sub, overall, overallPct, goodsNet, install, installPct, pack,
+                localFreight: localF, intlFreight: intlF + imp, freight, grand, taxable,
+                gstTotal, cgst, sgst, igst, intra, finalPayable };
 }
 
 // ---- Save quote (server computes authoritative totals) ----
@@ -628,6 +720,7 @@ async function saveQuote() {
       customer_address: $("qAddress").value.trim() || null,
       customer_mobile: $("qMobile").value.trim() || null,
       client_id: selectedClientId,
+      lead_id: parseInt($("qLead").value, 10) || null,
       currency: cur(),
       terms_template_id: parseInt($("qTerms").value, 10) || null,
       install_enabled: $("aInstall").checked,
@@ -693,9 +786,12 @@ function renderPreview() {
     const t = lastPreview.totals;
     $("pvSub").textContent = fmt(t.subtotal_net);
     setPreviewOverall(t.overall_discount);
+    setPreviewPct("pvRowOverallPct", "pvOverallPct", t.overall_discount, t.overall_disc_pct);
+    setPreviewPct("pvRowInstallPct", "pvInstallPct", t.installation, t.installation_pct);
     $("pvInstall").textContent = fmt(t.installation);
     $("pvPack").textContent = fmt(lastPreview.packaging || 0);
-    $("pvFreight").textContent = fmt(lastPreview.freight || 0);
+    setPreviewFreight(lastPreview.local_freight || 0,
+                      (lastPreview.intl_freight || 0) + (lastPreview.import_charge || 0));
     $("pvTaxable").textContent = fmt(t.taxable_amount);
     setPreviewTax(t.is_intra_state, t.cgst, t.sgst, t.igst);
     $("pvGrand").textContent = fmt(t.final_payable);
@@ -727,9 +823,11 @@ function renderPreview() {
     const Q = window._Q || {};
     $("pvSub").textContent = fmt(Q.sub || 0);
     setPreviewOverall(Q.overall || 0);
+    setPreviewPct("pvRowOverallPct", "pvOverallPct", Q.overall, Q.overallPct);
+    setPreviewPct("pvRowInstallPct", "pvInstallPct", Q.install, Q.installPct);
     $("pvInstall").textContent = fmt(Q.install || 0);
     $("pvPack").textContent = fmt(Q.pack || 0);
-    $("pvFreight").textContent = fmt(Q.freight || 0);
+    setPreviewFreight(Q.localFreight || 0, Q.intlFreight || 0);
     $("pvTaxable").textContent = fmt(Q.taxable || 0);
     setPreviewTax(Q.intra, Q.cgst || 0, Q.sgst || 0, Q.igst || 0);
     $("pvGrand").textContent = fmt(Q.finalPayable || 0);
@@ -742,6 +840,17 @@ function renderPreview() {
 function setPreviewOverall(amount) {
   $("pvRowOverall").classList.toggle("hide", !amount);
   $("pvOverall").textContent = "– " + fmt(amount || 0);
+}
+// Shows a "<label> %" row only when its underlying amount is actually charged.
+function setPreviewPct(rowId, valId, amount, pct) {
+  $(rowId).classList.toggle("hide", !amount);
+  $(valId).textContent = (pct || 0).toFixed(1) + "%";
+}
+function setPreviewFreight(local, intl) {
+  $("pvRowLocalFreight").classList.toggle("hide", !local);
+  $("pvLocalFreight").textContent = fmt(local || 0);
+  $("pvRowIntlFreight").classList.toggle("hide", !intl);
+  $("pvIntlFreight").textContent = fmt(intl || 0);
 }
 // ---- Quotation history: the original plus every revision raised against it ----
 async function renderHistory() {
@@ -818,7 +927,8 @@ function applyQuoteToBuilder(q) {
   $("qEmail").value = q.customer_email || "";
   $("qAddress").value = q.customer_address || "";
   $("qMobile").value = q.customer_mobile || "";
-  $("qLead").value = ""; $("qLeadInfo").textContent = ""; selectedClientId = null;
+  selectedClientId = q.client_id || null;
+  selectLeadForBuilder(q.lead_id || null);
   if (q.terms_template_id != null) $("qTerms").value = q.terms_template_id;
   if (q.currency && $("curSel").querySelector('option[value="' + q.currency + '"]')) $("curSel").value = q.currency;
   // Restore GST / add-on / freight fields. Installation rates come from the
@@ -865,6 +975,17 @@ async function reviseCurrent() {
     goto("builder");
   } catch (e) { toast("Revise failed: " + e.message, true); }
 }
+async function deleteCurrentQuote() {
+  if (!requireSaved()) return;
+  if (!confirm("Delete this quotation permanently? This cannot be undone.")) return;
+  try {
+    await API.deleteQuote(currentQuoteId);
+    toast("Quotation deleted.");
+    currentQuoteId = null; currentQuoteStatus = null; lastPreview = null;
+    await loadDashboard();
+    goto("dashboard");
+  } catch (e) { toast("Delete failed: " + e.message, true); }
+}
 
 // ---- Masters screens ----
 // Clients, Projects and Leads are now separate pages with a real hierarchy:
@@ -896,10 +1017,10 @@ async function renderClientsMaster() {
       (editing ? ' <button class="btn ghost sm" onclick="cancelClientEdit()">Cancel</button>' : "") + "</div>" +
       '<div class="card pad"><div class="section-title">Clients (' + rows.length + ')</div>' +
       '<table class="tbl"><thead><tr><th>Company Name</th><th>Email</th><th>Phone</th><th>Mobile</th><th>City</th><th></th>' +
-      (canSeeCost ? "<th></th>" : "") + "</tr></thead><tbody>" +
+      (canDelete ? "<th></th>" : "") + "</tr></thead><tbody>" +
       (rows.length ? rows.map((r) => "<tr><td>" + esc(r.name) + "</td><td>" + esc(r.email) + "</td><td>" + esc(r.phone) + "</td><td>" + esc(r.mobile) + "</td><td>" + esc(r.city) +
         '</td><td><button class="btn ghost sm" onclick="editClient(' + r.id + ')">Edit</button></td>' +
-        (canSeeCost ? '<td><button class="del" onclick="delClient(' + r.id + ')">✕</button></td>' : "") + "</tr>").join("")
+        (canDelete ? '<td><button class="del" onclick="delClient(' + r.id + ')">✕</button></td>' : "") + "</tr>").join("")
         : '<tr><td colspan="7"><div class="empty">No clients yet.</div></td></tr>') + "</tbody></table></div>";
     if (editing) {
       const r = rows.find((x) => x.id === editingClientId);
@@ -943,10 +1064,10 @@ async function renderProjectsMaster() {
       (editing ? ' <button class="btn ghost sm" onclick="cancelProjectEdit()">Cancel</button>' : "") + "</div>" +
       '<div class="card pad"><div class="section-title">Projects (' + rows.length + ')</div>' +
       '<table class="tbl"><thead><tr><th>Company Name</th><th>Project</th><th>City</th><th></th>' +
-      (canSeeCost ? "<th></th>" : "") + "</tr></thead><tbody>" +
+      (canDelete ? "<th></th>" : "") + "</tr></thead><tbody>" +
       (rows.length ? rows.map((r) => "<tr><td>" + esc(clientName(r.client_id)) + "</td><td>" + esc(r.name) + "</td><td>" + esc(r.city) +
         '</td><td><button class="btn ghost sm" onclick="editProject(' + r.id + ')">Edit</button></td>' +
-        (canSeeCost ? '<td><button class="del" onclick="delProject(' + r.id + ')">✕</button></td>' : "") + "</tr>").join("")
+        (canDelete ? '<td><button class="del" onclick="delProject(' + r.id + ')">✕</button></td>' : "") + "</tr>").join("")
         : '<tr><td colspan="5"><div class="empty">No projects yet — add a client first.</div></td></tr>') + "</tbody></table></div>";
     if (editing) {
       const r = rows.find((x) => x.id === editingProjectId);
@@ -1012,14 +1133,14 @@ async function renderLeadsMaster() {
       (editing ? ' <button class="btn ghost sm" onclick="cancelLeadEdit()">Cancel</button>' : "") + "</div>" +
       '<div class="card pad"><div class="section-title">Leads (' + rows.length + ')</div>' +
       '<table class="tbl"><thead><tr><th>Received</th><th>Project</th><th>Company Name</th><th>Client Name</th><th>Mobile</th><th>Email ID</th><th>Requirement</th><th>Handled By</th><th>Stage</th><th></th>' +
-      (canSeeCost ? "<th></th>" : "") + "</tr></thead><tbody>" +
+      (canDelete ? "<th></th>" : "") + "</tr></thead><tbody>" +
       (rows.length ? rows.map((r) => "<tr><td>" + fmtDate(r.received_date) + "</td><td>" + esc(projectName(r.project_id)) +
         "</td><td>" + esc(leadClientLabel(projects, clients, r.project_id)) +
         "</td><td>" + esc(r.name) + "</td><td>" + esc(r.whatsapp_number) + "</td><td>" + esc(r.email) +
         '</td><td><span title="' + esc(r.requirement) + '">' + esc(clip(r.requirement, 40)) +
         "</span></td><td>" + esc(r.owner) + "</td><td>" + stageName[r.stage] +
         '</td><td><button class="btn ghost sm" onclick="editLead(' + r.id + ')">Edit</button></td>' +
-        (canSeeCost ? '<td><button class="del" onclick="delLead(' + r.id + ')">✕</button></td>' : "") + "</tr>").join("")
+        (canDelete ? '<td><button class="del" onclick="delLead(' + r.id + ')">✕</button></td>' : "") + "</tr>").join("")
         : '<tr><td colspan="11"><div class="empty">No leads yet — add a project first.</div></td></tr>') + "</tbody></table></div>";
     if (editing) {
       const r = rows.find((x) => x.id === editingLeadId);
@@ -1054,13 +1175,13 @@ async function saveLead() {
   try {
     if (editingLeadId != null) { await API.updateLead(editingLeadId, data); toast("Lead updated."); editingLeadId = null; }
     else { await API.createLead(data); toast("Lead added."); }
-    renderLeadsMaster(); loadDashboard();
+    renderLeadsMaster(); loadDashboard(); loadBuilderLeads();
   } catch (e) { toast("Save failed: " + e.message, true); }
 }
 function editLead(id) { editingLeadId = id; renderLeadsMaster(); }
 function cancelLeadEdit() { editingLeadId = null; renderLeadsMaster(); }
 async function delLead(id) {
-  try { await API.deleteLead(id); toast("Lead deleted."); renderLeadsMaster(); loadDashboard(); }
+  try { await API.deleteLead(id); toast("Lead deleted."); renderLeadsMaster(); loadDashboard(); loadBuilderLeads(); }
   catch (e) { toast("Delete failed: " + e.message, true); }
 }
 
@@ -1079,7 +1200,9 @@ async function renderTermsMaster() {
       rows.map((t) =>
         '<div class="card pad" style="margin-bottom:12px"><div class="section-title">' + esc(t.name) + ' <span class="badge cli">' + t.kind + "</span></div>" +
         '<textarea id="tb' + t.id + '" rows="5" style="width:100%;border:1px solid var(--line);border-radius:9px;padding:10px">' + esc(t.body) + "</textarea>" +
-        '<button class="btn ghost sm" style="margin-top:10px" onclick="saveTerms(' + t.id + ",'" + esc(t.name).replace(/'/g, "") + "','" + t.kind + "')\">💾 Save</button></div>").join("");
+        '<button class="btn ghost sm" style="margin-top:10px" onclick="saveTerms(' + t.id + ",'" + esc(t.name).replace(/'/g, "") + "','" + t.kind + "')\">💾 Save</button>" +
+        (canDelete ? ' <button class="btn ghost sm" style="margin-top:10px" onclick="delTerms(' + t.id + ')">🗑 Delete</button>' : "") +
+        "</div>").join("");
   } catch (e) { c.innerHTML = '<div class="empty">' + e.message + "</div>"; }
 }
 async function addTerms() {
@@ -1091,6 +1214,10 @@ async function addTerms() {
 async function saveTerms(id, name, kind) {
   await API.updateTerms(id, { name, kind, body: $("tb" + id).value });
   toast("Template saved."); loadTerms();
+}
+async function delTerms(id) {
+  try { await API.deleteTerms(id); toast("Template deleted."); renderTermsMaster(); loadTerms(); }
+  catch (e) { toast("Delete failed: " + e.message, true); }
 }
 
 // --- Email Setup ---
@@ -1176,22 +1303,25 @@ async function renderUsersMaster() {
       '<div class="field"><label>Password</label><input id="nuPassword" type="password" placeholder="' + (editing ? "(unchanged)" : "min. 6 characters") + '"></div>' +
       '<div class="field"><label>Role</label><select id="nuRole"><option value="sales">Sales</option><option value="manager">Manager</option><option value="admin">Admin</option></select></div>' +
       '<div class="field"><label>Branch</label><input id="nuBranch"></div>' +
-      '<div class="field"><label>Active</label><select id="nuActive"><option value="true">Yes</option><option value="false">No</option></select></div></div>' +
+      '<div class="field"><label>Active</label><select id="nuActive"><option value="true">Yes</option><option value="false">No</option></select></div>' +
+      '<div class="field"><label>Delete Access <span class="muted" style="font-weight:400">(Masters &amp; Quotations)</span></label><select id="nuCanDelete"><option value="false">No</option><option value="true">Yes</option></select></div></div>' +
       '<button class="btn primary sm" onclick="saveUser()">' + (editing ? "💾 Update User" : "＋ Add User") + "</button>" +
       (editing ? ' <button class="btn ghost sm" onclick="cancelUserEdit()">Cancel</button>' : "") + "</div>" +
       '<div class="card pad"><div class="section-title">Users (' + rows.length + ')</div>' +
-      '<table class="tbl"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Branch</th><th>Active</th><th></th><th></th></tr></thead><tbody>' +
+      '<table class="tbl"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Branch</th><th>Active</th><th>Delete Access</th><th></th><th></th></tr></thead><tbody>' +
       (rows.length ? rows.map((r) => "<tr><td>" + esc(r.name) + "</td><td>" + esc(r.email) + "</td><td>" + esc(r.role) +
         "</td><td>" + esc(r.branch) + "</td><td>" + (r.is_active ? "Yes" : "No") +
+        "</td><td>" + (r.role === "manager" || r.role === "admin" ? '<span class="muted">always</span>' : (r.can_delete ? "Yes" : "No")) +
         '</td><td><button class="btn ghost sm" onclick="editUser(' + r.id + ')">Edit</button></td>' +
         '<td><button class="del" onclick="delUser(' + r.id + ')">✕</button></td></tr>').join("")
-        : '<tr><td colspan="7"><div class="empty">No users yet.</div></td></tr>') + "</tbody></table></div>";
+        : '<tr><td colspan="8"><div class="empty">No users yet.</div></td></tr>') + "</tbody></table></div>";
     if (editing) {
       const r = rows.find((x) => x.id === editingUserId);
       if (r) {
         $("nuName").value = r.name || ""; $("nuEmail").value = r.email || "";
         $("nuRole").value = r.role; $("nuBranch").value = r.branch || "";
         $("nuActive").value = r.is_active ? "true" : "false";
+        $("nuCanDelete").value = r.can_delete ? "true" : "false";
       }
     }
   } catch (e) { c.innerHTML = '<div class="empty">' + e.message + "</div>"; }
@@ -1206,6 +1336,7 @@ async function saveUser() {
   const data = {
     name, email, role: $("nuRole").value, branch: $("nuBranch").value.trim() || null,
     is_active: $("nuActive").value === "true", password: password || null,
+    can_delete: $("nuCanDelete").value === "true",
   };
   try {
     if (editingUserId != null) { await API.updateUser(editingUserId, data); toast("User updated."); editingUserId = null; }

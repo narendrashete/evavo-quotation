@@ -214,24 +214,33 @@ def _draw_totals(pdf: FPDF, preview: dict, *, rate_to_inr: float, currency: str)
     t = preview.get("totals", {})
     pdf.ln(3)
 
-    # (label, amount, bold, negative) — negative rows print with a leading "-".
-    rows: list[tuple[str, float, bool, bool]] = [
-        ("Subtotal", t.get("subtotal_net", 0), False, False),
+    # (label, amount, bold, negative, is_pct) — negative rows print with a
+    # leading "-"; pct rows print the value as "X%" instead of a money amount.
+    rows: list[tuple[str, float, bool, bool, bool]] = [
+        ("Subtotal (A)", t.get("subtotal_net", 0), False, False, False),
     ]
     if t.get("overall_discount"):
-        rows.append(("Overall Discount", t.get("overall_discount", 0), False, True))
-    rows.append(("Installation", t.get("installation", 0), False, False))
+        rows.append(("Overall Discount", t.get("overall_discount", 0), False, True, False))
+        rows.append(("Overall Discount %", t.get("overall_disc_pct", 0), False, False, True))
+    if t.get("installation"):
+        rows.append(("Installation %", t.get("installation_pct", 0), False, False, True))
+    rows.append(("Installation", t.get("installation", 0), False, False, False))
     if preview.get("packaging"):
-        rows.append(("Packaging", preview.get("packaging", 0), False, False))
-    if preview.get("freight"):
-        rows.append(("Freight & import", preview.get("freight", 0), False, False))
-    rows.append(("Taxable Amount", t.get("taxable_amount", 0), False, False))
+        rows.append(("Packaging", preview.get("packaging", 0), False, False, False))
+    if preview.get("local_freight"):
+        rows.append(("Local Freight", preview.get("local_freight", 0), False, False, False))
+    # International Freight also carries any import charge — presented as one
+    # figure rather than a separate "Import Freight" line.
+    intl_total = (preview.get("intl_freight") or 0) + (preview.get("import_charge") or 0)
+    if intl_total:
+        rows.append(("International Freight", intl_total, False, False, False))
+    rows.append(("Subtotal (B)", t.get("taxable_amount", 0), False, False, False))
     if t.get("is_intra_state"):
-        rows.append(("CGST", t.get("cgst", 0), False, False))
-        rows.append(("SGST", t.get("sgst", 0), False, False))
+        rows.append(("CGST", t.get("cgst", 0), False, False, False))
+        rows.append(("SGST", t.get("sgst", 0), False, False, False))
     elif t.get("gst_total", 0):
-        rows.append(("IGST", t.get("igst", 0), False, False))
-    rows.append(("Final Payable", t.get("final_payable", 0), True, False))
+        rows.append(("IGST", t.get("igst", 0), False, False, False))
+    rows.append(("Final Amount", t.get("final_payable", 0), True, False, False))
 
     label_w, amt_w = 45, 30
     pad = 3.5
@@ -248,7 +257,7 @@ def _draw_totals(pdf: FPDF, preview: dict, *, rate_to_inr: float, currency: str)
     pdf.rect(box_x, box_y, box_w, box_h, "DF")
 
     y = box_y + pad
-    for i, (label, amount_inr, bold, negative) in enumerate(rows):
+    for i, (label, value, bold, negative, is_pct) in enumerate(rows):
         is_final = i == len(rows) - 1
         h = final_h if is_final else row_h
         if is_final:
@@ -268,8 +277,12 @@ def _draw_totals(pdf: FPDF, preview: dict, *, rate_to_inr: float, currency: str)
         pdf.set_font("Helvetica", "B" if bold else "", 11 if is_final else 9)
         pdf.set_text_color(*(NAVY if bold else (70, 88, 106)))
         pdf.cell(label_w, h, label, 0, 0, "L")
-        amount = _money(amount_inr, rate_to_inr, currency)
-        pdf.cell(amt_w, h, f"- {amount}" if negative else amount, 0, 0, "R")
+        if is_pct:
+            display = f"{value:g}%"
+        else:
+            amount = _money(value, rate_to_inr, currency)
+            display = f"- {amount}" if negative else amount
+        pdf.cell(amt_w, h, display, 0, 0, "R")
         y += h
 
     pdf.set_xy(pdf.l_margin, box_y + box_h + 4)

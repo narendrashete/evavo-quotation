@@ -30,6 +30,9 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(20), default="sales")  # sales|manager|admin
     branch: Mapped[str | None] = mapped_column(String(120), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Admin-assignable: lets a non-manager/admin user delete Master/Quotation
+    # records. Manager/admin always have delete rights regardless of this flag.
+    can_delete: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class FxRate(Base):
@@ -188,6 +191,9 @@ class Quote(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     quote_no: Mapped[str] = mapped_column(String(40), unique=True, index=True)
     client_id: Mapped[int | None] = mapped_column(ForeignKey("clients.id"), nullable=True)
+    # The Lead this quote was built from (if any) — so re-opening/editing a
+    # quote can re-select it in the builder's Lead dropdown.
+    lead_id: Mapped[int | None] = mapped_column(ForeignKey("leads.id"), nullable=True)
     customer_name: Mapped[str] = mapped_column(String(200))
     customer_email: Mapped[str | None] = mapped_column(String(200), nullable=True)
     customer_address: Mapped[str | None] = mapped_column(Text, nullable=True)

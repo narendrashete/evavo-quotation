@@ -85,7 +85,26 @@
 
       <!-- Product Catalog -->
       <section class="view" id="products">
-        <div class="page-head"><div><h1>Product Catalog</h1><p>Master list of spa &amp; salon equipment, imported from the working sheets.</p></div></div>
+        <div class="page-head"><div><h1>Product Catalog</h1><p>Master list of spa &amp; salon equipment, imported from the working sheets.</p></div><button class="btn primary hide" data-cost onclick="toggleAddProduct()">＋ Add Product</button></div>
+        <div class="card pad hide" id="addProductCard" style="margin-bottom:16px">
+          <div class="section-title">Add Product</div>
+          <div class="f2">
+            <div class="field"><label>Product Name</label><input id="npdName"></div>
+            <div class="field"><label>Model No.</label><input id="npdModel"></div>
+            <div class="field"><label>Category</label><input id="npdCategory" list="npdCategoryList" placeholder="e.g. Salon Equipment"></div>
+            <div class="field"><label>Product Category (install area)</label><select id="npdArea"><option value="">— not set —</option><option value="Dry Area">Dry Area</option><option value="Wet Area">Wet Area</option><option value="Others">Others</option></select></div>
+            <div class="field"><label>HSN Code</label><input id="npdHsn"></div>
+            <div class="field"><label>GST %</label><input id="npdGst" type="number" min="0" step="0.5" placeholder="default"></div>
+            <div class="field"><label>Source Price (INR)</label><input id="npdSourcePrice" type="number" min="0" step="0.01" value="0"></div>
+            <div class="field"><label>Loading Factor</label><input id="npdLoading" type="number" min="0" step="0.01" value="1.5"></div>
+            <div class="field"><label>Client Markup</label><input id="npdMarkup" type="number" min="0" step="0.01" value="2.0"></div>
+            <div class="field"><label>List Uplift %</label><input id="npdUplift" type="number" min="0" step="0.5" value="10"></div>
+          </div>
+          <div class="field"><label>Specification</label><textarea id="npdSpec" rows="3" placeholder="Shown on the detailed quotation"></textarea></div>
+          <datalist id="npdCategoryList"></datalist>
+          <button class="btn primary sm" onclick="saveNewProduct()">💾 Save Product</button>
+          <button class="btn ghost sm" onclick="toggleAddProduct()">Cancel</button>
+        </div>
         <div class="filters">
           <input id="prodSearch" placeholder="🔍  Search products…" oninput="renderProducts()">
           <select id="prodCat" onchange="renderProducts()"><option value="">All Categories</option></select>
@@ -133,7 +152,7 @@
           </div>
           <div class="summary"><div class="card pad">
             <div class="section-title">Summary</div>
-            <div class="sum-row"><span class="muted">Items subtotal</span><span id="sSub" class="num">—</span></div>
+            <div class="sum-row"><span class="muted">Subtotal (A)</span><span id="sSub" class="num">—</span></div>
             <div class="sum-row"><span class="muted">Line discounts</span><span id="sDisc" class="num">—</span></div>
             <div style="margin:12px 0 4px" class="section-title">Overall Discount</div>
             <div class="addon-row"><label>Overall discount %</label><input type="number" id="aOverallPct" min="0" max="100" step="0.5" placeholder="0" oninput="onOverallDiscPct()"></div>
@@ -150,12 +169,12 @@
             <div class="addon-row"><label>Local freight</label><input type="number" id="aLocalFreight" value="0" onchange="recalc()" oninput="recalc()"></div>
             <div class="addon-row"><label>International freight</label><input type="number" id="aIntlFreight" value="0" onchange="recalc()" oninput="recalc()"></div>
             <div class="addon-row"><label>Import charges</label><input type="number" id="aImport" value="0" onchange="recalc()" oninput="recalc()"></div>
-            <div class="sum-row" style="margin-top:10px"><span class="muted">Taxable amount</span><span id="sTaxable" class="num">—</span></div>
+            <div class="sum-row" style="margin-top:10px"><span class="muted">Subtotal (B)</span><span id="sTaxable" class="num">—</span></div>
             <div class="sum-row" id="rowCgst"><span class="muted">CGST</span><span id="sCgst" class="num">—</span></div>
             <div class="sum-row" id="rowSgst"><span class="muted">SGST</span><span id="sSgst" class="num">—</span></div>
             <div class="sum-row" id="rowIgst"><span class="muted">IGST</span><span id="sIgst" class="num">—</span></div>
             <div class="sum-row"><span class="muted">Grand total (pre-tax)</span><span id="sGrand" class="num">—</span></div>
-            <div class="sum-row total" style="margin-top:8px"><span>Final Payable</span><span id="sFinal" class="num">—</span></div>
+            <div class="sum-row total" style="margin-top:8px"><span>Final Amount</span><span id="sFinal" class="num">—</span></div>
             <div class="approval hide" id="approvalBox">⚠ <b>Approval required.</b> This discount exceeds policy — the quote will save in <b>Pending Approval</b> status and can't be emailed or WhatsApped until a manager/admin approves it.</div>
             <div class="margin-box" data-cost>
               <div class="mb-h"><span>Internal — Manager only</span><span class="badge int">CONFIDENTIAL</span></div>
@@ -169,7 +188,7 @@
 
       <!-- Client Preview -->
       <section class="view" id="preview">
-        <div class="page-head"><div><h1>Client Preview</h1><p>Exactly what the client receives — selling prices only.</p></div><div style="display:flex;gap:9px;flex-wrap:wrap"><button class="btn ghost" onclick="goto('builder')">← Edit</button><button class="btn ghost" id="reviseBtn" onclick="reviseCurrent()">🔁 Revise</button><button class="btn primary" id="pdfBtn" onclick="downloadPdf()">⬇ Download PDF</button><button class="btn teal" id="emailBtn" onclick="emailCurrent()">✉ Email to client</button><button class="btn whatsapp" id="waBtn" onclick="whatsappCurrent()">📱 Send by WhatsApp</button></div></div>
+        <div class="page-head"><div><h1>Client Preview</h1><p>Exactly what the client receives — selling prices only.</p></div><div style="display:flex;gap:9px;flex-wrap:wrap"><button class="btn ghost" onclick="goto('builder')">← Edit</button><button class="btn ghost" id="reviseBtn" onclick="reviseCurrent()">🔁 Revise</button><button class="btn primary" id="pdfBtn" onclick="downloadPdf()">⬇ Download PDF</button><button class="btn teal" id="emailBtn" onclick="emailCurrent()">✉ Email to client</button><button class="btn whatsapp" id="waBtn" onclick="whatsappCurrent()">📱 Send by WhatsApp</button><button class="btn ghost hide" data-delete onclick="deleteCurrentQuote()">🗑 Delete Quotation</button></div></div>
         <div class="safe-note">🔒 Client-safe view — internal cost, margin and FX build-up are never included in this document.</div>
         <div class="card pad hide" id="historyCard" style="margin-bottom:16px">
           <div class="section-title">🔁 Quotation History</div>
@@ -182,7 +201,7 @@
           <div class="pb">
             <div class="to"><div><b>Bill To</b><span id="pvBillTo">—</span></div><div style="text-align:right"><b>Currency</b><span id="pvCur">INR (₹)</span></div></div>
             <table class="cli"><thead><tr><th>#</th><th>Item</th><th class="num">Unit Price</th><th class="num">Disc %</th><th class="num">Discounted Unit Price</th><th class="num">Qty</th><th class="num">HSN</th><th class="num">Amount</th></tr></thead><tbody id="pvBody"></tbody></table>
-            <div class="cli-tot"><div class="r"><span>Subtotal</span><span id="pvSub" class="num">—</span></div><div class="r hide" id="pvRowOverall"><span>Overall discount</span><span id="pvOverall" class="num">—</span></div><div class="r"><span>Installation</span><span id="pvInstall" class="num">—</span></div><div class="r"><span>Packaging</span><span id="pvPack" class="num">—</span></div><div class="r"><span>Freight &amp; import</span><span id="pvFreight" class="num">—</span></div><div class="r"><span>Taxable amount</span><span id="pvTaxable" class="num">—</span></div><div class="r" id="pvRowCgst"><span>CGST</span><span id="pvCgst" class="num">—</span></div><div class="r" id="pvRowSgst"><span>SGST</span><span id="pvSgst" class="num">—</span></div><div class="r" id="pvRowIgst"><span>IGST</span><span id="pvIgst" class="num">—</span></div><div class="r g"><span>Final Payable</span><span id="pvGrand" class="num">—</span></div></div>
+            <div class="cli-tot"><div class="r"><span>Subtotal (A)</span><span id="pvSub" class="num">—</span></div><div class="r hide" id="pvRowOverall"><span>Overall discount</span><span id="pvOverall" class="num">—</span></div><div class="r hide" id="pvRowOverallPct"><span>Overall Discount %</span><span id="pvOverallPct" class="num">—</span></div><div class="r hide" id="pvRowInstallPct"><span>Installation %</span><span id="pvInstallPct" class="num">—</span></div><div class="r"><span>Installation</span><span id="pvInstall" class="num">—</span></div><div class="r"><span>Packaging</span><span id="pvPack" class="num">—</span></div><div class="r hide" id="pvRowLocalFreight"><span>Local Freight</span><span id="pvLocalFreight" class="num">—</span></div><div class="r hide" id="pvRowIntlFreight"><span>International Freight</span><span id="pvIntlFreight" class="num">—</span></div><div class="r"><span>Subtotal (B)</span><span id="pvTaxable" class="num">—</span></div><div class="r" id="pvRowCgst"><span>CGST</span><span id="pvCgst" class="num">—</span></div><div class="r" id="pvRowSgst"><span>SGST</span><span id="pvSgst" class="num">—</span></div><div class="r" id="pvRowIgst"><span>IGST</span><span id="pvIgst" class="num">—</span></div><div class="r g"><span>Final Amount</span><span id="pvGrand" class="num">—</span></div></div>
             <div class="terms" id="pvTerms"></div>
           </div>
         </div>

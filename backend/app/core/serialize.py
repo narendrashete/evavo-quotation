@@ -152,6 +152,7 @@ def quote_out(quote, include_cost: bool, db: "Session | None" = None) -> dict:
     out = {
         "id": quote.id, "quote_no": quote.quote_no, "status": quote.status,
         "approved": quote.approved,
+        "client_id": quote.client_id, "lead_id": quote.lead_id,
         "customer_name": quote.customer_name, "customer_email": quote.customer_email,
         "customer_address": quote.customer_address, "customer_mobile": quote.customer_mobile,
         "currency": quote.currency, "terms_template_id": quote.terms_template_id,
@@ -189,6 +190,13 @@ def quote_out(quote, include_cost: bool, db: "Session | None" = None) -> dict:
             "is_intra_state": totals.is_intra_state,
             "final_payable": round(totals.final_payable, 2),
             "needs_approval": totals.needs_approval,
+            # Effective (blended) rates for client-facing display — computed
+            # from the actual charged amounts rather than echoing the snapshot
+            # rate, so they stay correct even when a flat override was used.
+            "installation_pct": round(
+                totals.installation / totals.goods_net * 100, 2) if totals.goods_net else 0.0,
+            "overall_disc_pct": round(
+                totals.overall_discount / totals.subtotal_net * 100, 2) if totals.subtotal_net else 0.0,
         },
     }
     if include_cost:

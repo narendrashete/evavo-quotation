@@ -20,7 +20,7 @@ router = APIRouter(prefix="/api/users", tags=["users"])
 
 def _out(u: User) -> dict:
     return {"id": u.id, "name": u.name, "email": u.email, "role": u.role,
-            "branch": u.branch, "is_active": u.is_active}
+            "branch": u.branch, "is_active": u.is_active, "can_delete": u.can_delete}
 
 
 @router.get("")
@@ -37,7 +37,8 @@ def create_user(body: UserIn, db: Session = Depends(get_session),
     if db.execute(select(User).where(User.email == body.email)).scalar_one_or_none():
         raise HTTPException(409, "A user with this email already exists")
     u = User(name=body.name, email=body.email, password_hash=hash_password(body.password),
-              role=body.role, branch=body.branch, is_active=body.is_active)
+              role=body.role, branch=body.branch, is_active=body.is_active,
+              can_delete=body.can_delete)
     db.add(u)
     db.commit()
     db.refresh(u)
@@ -53,8 +54,8 @@ def update_user(user_id: int, body: UserIn, db: Session = Depends(get_session),
     existing = db.execute(select(User).where(User.email == body.email)).scalar_one_or_none()
     if existing and existing.id != user_id:
         raise HTTPException(409, "A user with this email already exists")
-    u.name, u.email, u.role, u.branch, u.is_active = (
-        body.name, body.email, body.role, body.branch, body.is_active)
+    u.name, u.email, u.role, u.branch, u.is_active, u.can_delete = (
+        body.name, body.email, body.role, body.branch, body.is_active, body.can_delete)
     if body.password:
         u.password_hash = hash_password(body.password)
     db.commit()

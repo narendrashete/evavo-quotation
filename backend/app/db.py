@@ -108,6 +108,10 @@ _NEW_COLUMNS = [
     # Revision chain (original <- R1 <- R2 ...)
     ("quotes", "root_quote_id", "INTEGER"),
     ("quotes", "revision_no", "INTEGER DEFAULT 0"),
+    # Lead linkage (so editing a quote keeps its Lead selection) and
+    # admin-assignable delete permission.
+    ("quotes", "lead_id", "INTEGER"),
+    ("users", "can_delete", "BOOLEAN DEFAULT FALSE"),
 ]
 
 

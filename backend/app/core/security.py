@@ -75,3 +75,17 @@ def require_role(*allowed: str):
                                 f"Requires role in {allowed}")
         return user
     return _dep
+
+
+def can_delete(user) -> bool:
+    """Manager/admin always can; an admin can additionally grant delete rights
+    to individual sales users via User.can_delete."""
+    return user.role in ("manager", "admin") or bool(getattr(user, "can_delete", False))
+
+
+def require_delete_permission(user=Depends(get_current_user)):
+    """Dependency: 403 unless the caller may delete Master/Quotation records."""
+    if not can_delete(user):
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            "You do not have permission to delete this record")
+    return user

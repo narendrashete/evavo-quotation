@@ -289,3 +289,90 @@ def test_sales_cannot_edit_product_pricing(client, sales_headers):
     r = client.put("/api/masters/products/1", json={"client_markup": 2.5},
                    headers=sales_headers)
     assert r.status_code == 403
+
+
+# --- Delete permissions (manager/admin always; admin can grant to a user) ----
+
+def test_manager_can_delete_quote(client, manager_headers):
+    created = client.post("/api/quotes", json=_new_quote_payload(),
+                          headers=manager_headers).json()
+    r = client.delete(f"/api/quotes/{created['id']}", headers=manager_headers)
+    assert r.status_code == 200
+    assert client.get(f"/api/quotes/{created['id']}", headers=manager_headers).status_code == 404
+
+
+def test_sales_cannot_delete_quote_without_grant(client, manager_headers, sales_headers):
+    created = client.post("/api/quotes", json=_new_quote_payload(),
+                          headers=manager_headers).json()
+    r = client.delete(f"/api/quotes/{created['id']}", headers=sales_headers)
+    assert r.status_code == 403
+
+
+def test_admin_can_grant_delete_access_to_a_sales_user(client, admin_headers, sales_headers):
+    me = client.get("/api/auth/me", headers=sales_headers).json()
+    r = client.put(f"/api/users/{me['id']}", json={
+        "name": "Sales", "email": "sales@evavo.test", "role": "sales",
+        "is_active": True, "can_delete": True,
+    }, headers=admin_headers)
+    assert r.status_code == 200 and r.json()["can_delete"] is True
+
+    created = client.post("/api/quotes", json=_new_quote_payload(),
+                          headers=admin_headers).json()
+    r2 = client.delete(f"/api/quotes/{created['id']}", headers=sales_headers)
+    assert r2.status_code == 200
+
+
+def test_cannot_delete_quote_with_revisions(client, manager_headers):
+    created = client.post("/api/quotes", json=_new_quote_payload(),
+                          headers=manager_headers).json()
+    client.post(f"/api/quotes/{created['id']}/revise", headers=manager_headers)
+    r = client.delete(f"/api/quotes/{created['id']}", headers=manager_headers)
+    assert r.status_code == 400
+
+
+def test_manager_can_create_and_delete_product(client, manager_headers):
+    r = client.post("/api/masters/products", json={
+        "name": "Test Facial Steamer", "category": "Salon Equipment",
+        "source_price_inr": 5000.0,
+    }, headers=manager_headers)
+    assert r.status_code == 200, r.text
+    pid = r.json()["id"]
+
+    r2 = client.delete(f"/api/masters/products/{pid}", headers=manager_headers)
+    assert r2.status_code == 200
+    assert client.get(f"/api/products/{pid}", headers=manager_headers).status_code == 404
+
+
+def test_sales_cannot_create_product(client, sales_headers):
+    r = client.post("/api/masters/products", json={
+        "name": "Test Product", "category": "Salon Equipment",
+    }, headers=sales_headers)
+    assert r.status_code == 403
+
+
+def test_cannot_delete_product_used_on_a_quote(client, manager_headers):
+    client.post("/api/quotes", json=_new_quote_payload(), headers=manager_headers)
+    r = client.delete("/api/masters/products/1", headers=manager_headers)
+    assert r.status_code == 400
+
+
+# --- Lead linkage survives create/read/revise -------------------------------
+
+def test_quote_carries_lead_id_through_create_and_revise(client, manager_headers):
+    client_row = client.post("/api/masters/clients", json={"name": "Acme Spa"},
+                             headers=manager_headers).json()
+    project = client.post("/api/masters/projects", json={
+        "name": "Acme Fitout", "client_id": client_row["id"]}, headers=manager_headers).json()
+    lead = client.post("/api/masters/leads", json={
+        "name": "Jane Doe", "project_id": project["id"]}, headers=manager_headers).json()
+
+    payload = _new_quote_payload()
+    payload["lead_id"] = lead["id"]
+    created = client.post("/api/quotes", json=payload, headers=manager_headers).json()
+    assert created["lead_id"] == lead["id"]
+
+    fetched = client.get(f"/api/quotes/{created['id']}", headers=manager_headers).json()
+    assert fetched["lead_id"] == lead["id"]
+
+    rev = client.post(f"/api/quotes/{created['id']}/revise", headers=manager_headers).json()
+    assert rev["lead_id"] == lead["id"]

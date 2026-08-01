@@ -11,10 +11,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_session
-from app.core.security import get_current_user, require_role
+from app.core.security import get_current_user, require_role, require_delete_permission
 from app.models import Client, Project, Lead, TermsTemplate, EmailSetup, Product, AppSettings
 from app.schemas import (
-    ClientIn, ProjectIn, LeadIn, TermsIn, EmailSetupIn, ProductUpdate, AppSettingsIn,
+    ClientIn, ProjectIn, LeadIn, TermsIn, EmailSetupIn, ProductUpdate, ProductCreate,
+    AppSettingsIn,
 )
 from app.core.serialize import product_out
 
@@ -98,6 +99,21 @@ def update_terms(terms_id: int, body: TermsIn, db: Session = Depends(get_session
     return {"id": t.id, "name": t.name}
 
 
+@router.delete("/terms/{terms_id}")
+def delete_terms(terms_id: int, db: Session = Depends(get_session),
+                 user=Depends(require_delete_permission)):
+    t = db.get(TermsTemplate, terms_id)
+    if not t:
+        raise HTTPException(404, "Terms template not found")
+    from app.models import Quote
+    n = db.execute(select(Quote).where(Quote.terms_template_id == terms_id)).scalars().first()
+    if n:
+        raise HTTPException(400, "Cannot delete: this terms template is used on one or more quotations")
+    db.delete(t)
+    db.commit()
+    return {"deleted": terms_id}
+
+
 # --- Email setup (single active row) ---
 @router.get("/email-setup")
 def get_email_setup(db: Session = Depends(get_session),
@@ -125,6 +141,31 @@ def save_email_setup(body: EmailSetupIn, db: Session = Depends(get_session),
 
 
 # --- Product pricing edits (manager/admin) ---
+@router.post("/products")
+def create_product(body: ProductCreate, db: Session = Depends(get_session),
+                   user=Depends(require_role("manager", "admin"))):
+    p = Product(**body.model_dump())
+    db.add(p)
+    db.commit()
+    db.refresh(p)
+    return product_out(p, include_cost=True)
+
+
+@router.delete("/products/{product_id}")
+def delete_product(product_id: int, db: Session = Depends(get_session),
+                   user=Depends(require_delete_permission)):
+    p = db.get(Product, product_id)
+    if not p:
+        raise HTTPException(404, "Product not found")
+    from app.models import QuoteLine
+    n = db.execute(select(QuoteLine).where(QuoteLine.product_id == product_id)).scalars().first()
+    if n:
+        raise HTTPException(400, "Cannot delete: this product is used on one or more quotations")
+    db.delete(p)
+    db.commit()
+    return {"deleted": product_id}
+
+
 @router.put("/products/{product_id}")
 def update_product(product_id: int, body: ProductUpdate, db: Session = Depends(get_session),
                    user=Depends(require_role("manager", "admin"))):
@@ -182,7 +223,7 @@ def update_client(client_id: int, body: ClientIn, db: Session = Depends(get_sess
 
 @router.delete("/clients/{client_id}")
 def delete_client(client_id: int, db: Session = Depends(get_session),
-                  user=Depends(require_role("manager", "admin"))):
+                  user=Depends(require_delete_permission)):
     c = db.get(Client, client_id)
     if not c:
         raise HTTPException(404, "Client not found")
@@ -233,7 +274,7 @@ def update_project(project_id: int, body: ProjectIn, db: Session = Depends(get_s
 
 @router.delete("/projects/{project_id}")
 def delete_project(project_id: int, db: Session = Depends(get_session),
-                   user=Depends(require_role("manager", "admin"))):
+                   user=Depends(require_delete_permission)):
     p = db.get(Project, project_id)
     if not p:
         raise HTTPException(404, "Project not found")
@@ -288,10 +329,14 @@ def update_lead(lead_id: int, body: LeadIn, db: Session = Depends(get_session),
 
 @router.delete("/leads/{lead_id}")
 def delete_lead(lead_id: int, db: Session = Depends(get_session),
-                user=Depends(require_role("manager", "admin"))):
+                user=Depends(require_delete_permission)):
     l = db.get(Lead, lead_id)
     if not l:
         raise HTTPException(404, "Lead not found")
+    from app.models import Quote
+    n = db.execute(select(Quote).where(Quote.lead_id == lead_id)).scalars().first()
+    if n:
+        raise HTTPException(400, "Cannot delete: this lead has one or more quotations linked to it")
     db.delete(l)
     db.commit()
     return {"deleted": lead_id}

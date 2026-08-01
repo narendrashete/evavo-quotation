@@ -18,7 +18,7 @@ const API = (() => {
       headers["Content-Type"] = "application/json";
       payload = JSON.stringify(body);
     }
-    const res = await fetch(path, { method, headers, body: payload });
+    const res = await fetch(path, { method, headers, body: payload, cache: "no-store" });
     if (res.status === 401) {
       clearToken();
       if (window.onUnauthorized) window.onUnauthorized();
@@ -56,9 +56,10 @@ const API = (() => {
     sendWhatsapp: (id) => request("POST", "/api/quotes/" + id + "/whatsapp"),
     reviseQuote: (id) => request("POST", "/api/quotes/" + id + "/revise"),
     quoteHistory: (id) => request("GET", "/api/quotes/" + id + "/history"),
+    deleteQuote: (id) => request("DELETE", "/api/quotes/" + id),
     async pdfBlob(id) {
       const res = await fetch("/api/quotes/" + id + "/pdf",
-        { headers: { Authorization: "Bearer " + getToken() } });
+        { headers: { Authorization: "Bearer " + getToken() }, cache: "no-store" });
       if (!res.ok) throw new Error("PDF failed");
       return res.blob();
     },
@@ -76,11 +77,14 @@ const API = (() => {
     deleteLead: (id) => request("DELETE", "/api/masters/leads/" + id),
     createTerms: (d) => request("POST", "/api/masters/terms", d),
     updateTerms: (id, d) => request("PUT", "/api/masters/terms/" + id, d),
+    deleteTerms: (id) => request("DELETE", "/api/masters/terms/" + id),
     getEmailSetup: () => request("GET", "/api/masters/email-setup"),
     saveEmailSetup: (d) => request("PUT", "/api/masters/email-setup", d),
     getSettings: () => request("GET", "/api/masters/settings"),
     saveSettings: (d) => request("PUT", "/api/masters/settings", d),
+    createProduct: (d) => request("POST", "/api/masters/products", d),
     updateProduct: (id, d) => request("PUT", "/api/masters/products/" + id, d),
+    deleteProduct: (id) => request("DELETE", "/api/masters/products/" + id),
     // users (admin-only)
     users: () => request("GET", "/api/users"),
     createUser: (d) => request("POST", "/api/users", d),

@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db import get_session
-from app.core.security import get_current_user, can_see_cost, require_role
+from app.core.security import get_current_user, can_see_cost, require_role, require_delete_permission
 from app.core.serialize import (
     quote_out, client_preview_out, product_engine_price, root_quote_no,
 )
@@ -242,7 +242,7 @@ def create_quote(body: QuoteCreate, db: Session = Depends(get_session),
     s = _get_settings(db)
     lines, totals, addons = _prepare_quote_write(db, body, user, s)
     quote = Quote(
-        quote_no=_next_quote_no(db), client_id=body.client_id,
+        quote_no=_next_quote_no(db), client_id=body.client_id, lead_id=body.lead_id,
         customer_name=body.customer_name, customer_email=body.customer_email,
         customer_address=body.customer_address, customer_mobile=body.customer_mobile,
         share_token=secrets.token_urlsafe(24),
@@ -287,6 +287,7 @@ def update_quote(quote_id: int, body: QuoteCreate, db: Session = Depends(get_ses
     s = _get_settings(db)
     lines, totals, addons = _prepare_quote_write(db, body, user, s)
     quote.client_id = body.client_id
+    quote.lead_id = body.lead_id
     quote.customer_name = body.customer_name
     quote.customer_email = body.customer_email
     quote.customer_address = body.customer_address
@@ -351,7 +352,7 @@ def get_quote(quote_id: int, db: Session = Depends(get_session),
 
 
 @router.get("/{quote_id}/preview")
-def preview_quote(quote_id: int, db: Session = Depends(get_session),
+def preview_quote(quote_id: int, response: Response, db: Session = Depends(get_session),
                   user=Depends(get_current_user)):
     """Client-safe preview — selling prices only, no cost ever (any role).
 
@@ -361,7 +362,28 @@ def preview_quote(quote_id: int, db: Session = Depends(get_session),
     q = db.get(Quote, quote_id)
     if not q:
         raise HTTPException(404, "Quote not found")
+    # Never let the browser reuse a stale preview after an edit is saved.
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
     return client_preview_out(q, db=db)
+
+
+@router.delete("/{quote_id}")
+def delete_quote(quote_id: int, db: Session = Depends(get_session),
+                 user=Depends(require_delete_permission)):
+    """Delete a quotation. Manager/admin always allowed; admin can additionally
+    grant delete rights to individual users (see User.can_delete)."""
+    q = db.get(Quote, quote_id)
+    if not q:
+        raise HTTPException(404, "Quote not found")
+    dependents = db.execute(select(func.count(Quote.id)).where(
+        (Quote.root_quote_id == quote_id) | (Quote.revision_of == quote_id))).scalar_one()
+    if dependents:
+        raise HTTPException(
+            400, f"Cannot delete: {dependents} revision(s) were raised against this "
+                 "quotation. Delete those revisions first.")
+    db.delete(q)
+    db.commit()
+    return {"deleted": quote_id}
 
 
 @router.patch("/{quote_id}/status")
@@ -399,6 +421,18 @@ def approve_quote(quote_id: int, db: Session = Depends(get_session),
             "approved_at": q.approved_at.isoformat()}
 
 
+def _pdf_headers(fname: str) -> dict:
+    # `no-store` so a browser (or the customer re-opening a WhatsApp/email share
+    # link) never serves a stale PDF cached from before the last edit — the
+    # quote id/share token stay the same across edits, so the URL alone can't
+    # bust a naive cache.
+    return {
+        "Content-Disposition": f'inline; filename="{fname}"',
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+        "Pragma": "no-cache",
+    }
+
+
 @router.get("/{quote_id}/pdf")
 def quote_pdf(quote_id: int, db: Session = Depends(get_session),
               user=Depends(get_current_user)):
@@ -409,8 +443,7 @@ def quote_pdf(quote_id: int, db: Session = Depends(get_session),
         raise HTTPException(404, "Quote not found")
     pdf = _render_pdf(db, q)
     fname = q.quote_no.replace("/", "_") + ".pdf"
-    return Response(content=pdf, media_type="application/pdf",
-                    headers={"Content-Disposition": f'inline; filename="{fname}"'})
+    return Response(content=pdf, media_type="application/pdf", headers=_pdf_headers(fname))
 
 
 @router.get("/{quote_id}/pdf/summary")
@@ -422,8 +455,7 @@ def quote_pdf_summary(quote_id: int, db: Session = Depends(get_session),
         raise HTTPException(404, "Quote not found")
     pdf = _render_summary_pdf(db, q)
     fname = q.quote_no.replace("/", "_") + "_summary.pdf"
-    return Response(content=pdf, media_type="application/pdf",
-                    headers={"Content-Disposition": f'inline; filename="{fname}"'})
+    return Response(content=pdf, media_type="application/pdf", headers=_pdf_headers(fname))
 
 
 @router.post("/{quote_id}/email")
@@ -486,8 +518,7 @@ def quote_share_pdf(token: str, db: Session = Depends(get_session)):
         raise HTTPException(404, "Quote not found")
     pdf = _render_pdf(db, q)
     fname = q.quote_no.replace("/", "_") + ".pdf"
-    return Response(content=pdf, media_type="application/pdf",
-                    headers={"Content-Disposition": f'inline; filename="{fname}"'})
+    return Response(content=pdf, media_type="application/pdf", headers=_pdf_headers(fname))
 
 
 @router.get("/share/{token}/summary")
@@ -501,8 +532,7 @@ def quote_share_summary(token: str, db: Session = Depends(get_session)):
         raise HTTPException(404, "Quote not found")
     pdf = _render_summary_pdf(db, q)
     fname = q.quote_no.replace("/", "_") + "_summary.pdf"
-    return Response(content=pdf, media_type="application/pdf",
-                    headers={"Content-Disposition": f'inline; filename="{fname}"'})
+    return Response(content=pdf, media_type="application/pdf", headers=_pdf_headers(fname))
 
 
 @router.get("/{quote_id}/history")
@@ -553,6 +583,7 @@ def revise_quote(quote_id: int, db: Session = Depends(get_session),
     revision_no = max((m.revision_no for m in family), default=0) + 1
     rev = Quote(
         quote_no=f"{root.quote_no}-R{revision_no}", client_id=src.client_id,
+        lead_id=src.lead_id,
         customer_name=src.customer_name, customer_email=src.customer_email,
         customer_address=src.customer_address, customer_mobile=src.customer_mobile,
         share_token=secrets.token_urlsafe(24),

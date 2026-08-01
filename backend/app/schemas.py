@@ -27,6 +27,7 @@ class UserOut(BaseModel):
     email: str
     role: str
     branch: Optional[str] = None
+    can_delete: bool = False
 
 
 class UserIn(BaseModel):
@@ -36,6 +37,7 @@ class UserIn(BaseModel):
     role: str = "sales"  # sales|manager|admin
     branch: Optional[str] = None
     is_active: bool = True
+    can_delete: bool = False  # admin-assignable delete rights on Masters/Quotations
 
 
 # --- FX ---
@@ -68,6 +70,7 @@ class QuoteCreate(BaseModel):
     customer_address: Optional[str] = None
     customer_mobile: Optional[str] = None
     client_id: Optional[int] = None
+    lead_id: Optional[int] = None
     currency: str = "INR"
     terms_template_id: Optional[int] = None
     install_enabled: bool = True
@@ -154,6 +157,22 @@ class ProductUpdate(BaseModel):
     client_markup: Optional[float] = None
     list_uplift: Optional[float] = None
     markup_base: Optional[str] = None
+
+
+class ProductCreate(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+    name: str
+    model_no: Optional[str] = None
+    category: str
+    area_category: Optional[str] = None     # Dry Area | Wet Area | Others
+    description: Optional[str] = None       # "Specification" in the UI
+    hsn_code: Optional[str] = None
+    gst_pct: Optional[float] = None
+    source_price_inr: float = 0.0
+    loading_factor: float = 1.5
+    client_markup: float = 2.0
+    list_uplift: float = 0.10
+    markup_base: str = "final_c2e"
 
 
 class AppSettingsIn(BaseModel):

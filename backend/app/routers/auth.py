@@ -27,4 +27,4 @@ def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get
 @router.get("/me", response_model=UserOut)
 def me(user: User = Depends(get_current_user)):
     return UserOut(id=user.id, name=user.name, email=user.email,
-                   role=user.role, branch=user.branch)
+                   role=user.role, branch=user.branch, can_delete=user.can_delete)
