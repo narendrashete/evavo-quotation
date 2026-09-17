@@ -38,3 +38,27 @@ jobs:
             sudo systemctl restart evquotenew
             sleep 2
             sudo systemctl is-active --quiet evquotenew
+
+      - name: Sync product images from DigitalOcean
+        run: |
+          set -e
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DO_SSH_KEY }}" > ~/.ssh/do_key
+          echo "${{ secrets.HOSTINGER_SSH_KEY }}" > ~/.ssh/hostinger_key
+          chmod 600 ~/.ssh/do_key ~/.ssh/hostinger_key
+
+          # Pull the current images off the DO droplet (read-only there) ...
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/do_key -o ConnectTimeout=10 \
+            "${{ secrets.DO_USER }}@${{ secrets.DO_HOST }}" \
+            "tar -czf /tmp/evavo_static.tar.gz -C /opt/evavo-quotation/backend/app/static product_images branding"
+          scp -o StrictHostKeyChecking=no -i ~/.ssh/do_key \
+            "${{ secrets.DO_USER }}@${{ secrets.DO_HOST }}:/tmp/evavo_static.tar.gz" /tmp/evavo_static.tar.gz
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/do_key "${{ secrets.DO_USER }}@${{ secrets.DO_HOST }}" \
+            "rm -f /tmp/evavo_static.tar.gz"
+
+          # ... and push them onto the Hostinger copy.
+          scp -o StrictHostKeyChecking=no -i ~/.ssh/hostinger_key /tmp/evavo_static.tar.gz \
+            "${{ secrets.HOSTINGER_USER }}@${{ secrets.HOSTINGER_HOST }}:/tmp/evavo_static.tar.gz"
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/hostinger_key \
+            "${{ secrets.HOSTINGER_USER }}@${{ secrets.HOSTINGER_HOST }}" \
+            "tar -xzf /tmp/evavo_static.tar.gz -C /home/evquotenew/app/backend/app/static && rm -f /tmp/evavo_static.tar.gz"
